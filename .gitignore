@@ -1,0 +1,34 @@
+# ---- Rust ----
+/target
+**/*.rs.bk
+*.pdb
+
+# ---- Local build tools (fetched by scripts/fetch-tools.ps1) ----
+/.tools/
+
+# ---- Node / Tauri app ----
+node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/
+extension/dist/
+*.tsbuildinfo
+
+# ---- Local runtime data (never commit a real vault) ----
+*.db
+*.db-wal
+*.db-shm
+*.dpapi
+/data/
+/scratch/
+
+# ---- Installer output ----
+installer/out/
+!installer/scripts/*.ps1
+
+# ---- OS / editor ----
+Thumbs.db
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/

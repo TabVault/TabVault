@@ -35,6 +35,9 @@ pub struct ClosedTabRow {
     pub source: String,
     pub confidence: String,
     pub window_event_id: Option<i64>,
+    /// The import batch this row came from, when it was imported from a
+    /// recovered session/history file (NULL for live captures).
+    pub source_batch_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +59,9 @@ pub struct ClosedWindowRow {
     pub pinned_count: i64,
     pub source: String,
     pub snapshot_id: Option<i64>,
+    /// The import batch this window came from, when imported from a recovered
+    /// session file (NULL for live captures).
+    pub source_batch_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -75,6 +81,8 @@ pub struct ClosedTabFilter {
     pub date_to: Option<i64>,
     /// Minimum active ms accumulated on the page.
     pub min_active_ms: Option<i64>,
+    /// Only rows from this import batch (recovered-from-file rows).
+    pub batch_id: Option<i64>,
     pub limit: Option<u32>,
     pub offset: Option<u32>,
 }
@@ -132,6 +140,10 @@ pub fn list_closed_tabs(conn: &Connection, filter: &ClosedTabFilter) -> Result<C
         where_sql.push_str(" AND active_ms >= ?");
         binds.push(Box::new(min_active));
     }
+    if let Some(batch) = filter.batch_id {
+        where_sql.push_str(" AND source_batch_id = ?");
+        binds.push(Box::new(batch));
+    }
 
     let total: i64 = conn.query_row(
         &format!("SELECT count(*) FROM closed_tab_events {where_sql}"),
@@ -144,7 +156,7 @@ pub fn list_closed_tabs(conn: &Connection, filter: &ClosedTabFilter) -> Result<C
     let sql = format!(
         "SELECT id, url, title, favicon, pinned, browser, profile, opened_ms, closed_ms,
                 last_active_ms, active_ms, visit_count, group_name, group_color,
-                part_of_closed_window, source, confidence, window_event_id
+                part_of_closed_window, source, confidence, window_event_id, source_batch_id
          FROM closed_tab_events {where_sql}
          ORDER BY closed_ms DESC, id DESC
          LIMIT {limit_clause}OFFSET {offset_clause}"
@@ -174,6 +186,7 @@ pub fn list_closed_tabs(conn: &Connection, filter: &ClosedTabFilter) -> Result<C
                 source: r.get(15)?,
                 confidence: r.get(16)?,
                 window_event_id: r.get(17)?,
+                source_batch_id: r.get(18)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -202,7 +215,7 @@ pub fn list_closed_windows(
     offset: u32,
 ) -> Result<Vec<ClosedWindowRow>> {
     let mut sql = String::from(
-        "SELECT id, browser, profile, window_id, closed_ms, tab_count, pinned_count, source, snapshot_id
+        "SELECT id, browser, profile, window_id, closed_ms, tab_count, pinned_count, source, snapshot_id, source_batch_id
          FROM closed_window_events",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -228,6 +241,7 @@ pub fn list_closed_windows(
                 pinned_count: r.get(6)?,
                 source: r.get(7)?,
                 snapshot_id: r.get(8)?,
+                source_batch_id: r.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -239,7 +253,7 @@ pub fn closed_window_tabs(conn: &Connection, window_event_id: i64) -> Result<Vec
     let mut stmt = conn.prepare(
         "SELECT id, url, title, favicon, pinned, browser, profile, opened_ms, closed_ms,
                 last_active_ms, active_ms, visit_count, group_name, group_color,
-                part_of_closed_window, source, confidence, window_event_id
+                part_of_closed_window, source, confidence, window_event_id, source_batch_id
          FROM closed_tab_events WHERE window_event_id = ?1
          ORDER BY tab_index ASC, id ASC",
     )?;
@@ -266,6 +280,7 @@ pub fn closed_window_tabs(conn: &Connection, window_event_id: i64) -> Result<Vec
                 source: r.get(15)?,
                 confidence: r.get(16)?,
                 window_event_id: r.get(17)?,
+                source_batch_id: r.get(18)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -508,11 +523,13 @@ pub struct PinnedSiteRow {
     pub pin_count: i64,
     pub currently_pinned: bool,
     pub group_name: Option<String>,
+    /// The tab-group color, so a re-pin recreates the original group colors.
+    pub group_color: Option<String>,
 }
 
 pub fn list_pinned_sites(conn: &Connection, browser: Option<&str>) -> Result<Vec<PinnedSiteRow>> {
     let mut sql = String::from(
-        "SELECT id, url, domain, title, favicon, browser, profile, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name
+        "SELECT id, url, domain, title, favicon, browser, profile, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name, group_color
          FROM pinned_sites",
     );
     let mut binds: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -537,6 +554,7 @@ pub fn list_pinned_sites(conn: &Connection, browser: Option<&str>) -> Result<Vec
                 pin_count: r.get(9)?,
                 currently_pinned: r.get::<_, i64>(10)? != 0,
                 group_name: r.get(11)?,
+                group_color: r.get(12)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -682,6 +700,65 @@ pub fn browser_profiles(conn: &Connection) -> Result<Vec<BrowserProfileRow>> {
                 profile: r.get(1)?,
                 snapshots: r.get(2)?,
                 last_snapshot_ms: r.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Import batches (the "Recover from the past" provenance)
+// ---------------------------------------------------------------------------
+
+/// One import of a recovered browser file — groups the rows that came from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportBatchRow {
+    pub id: i64,
+    pub started_ms: i64,
+    pub finished_ms: Option<i64>,
+    pub source: String,
+    pub source_path: Option<String>,
+    pub browser: Option<String>,
+    pub profile: Option<String>,
+    pub items_found: i64,
+    pub items_imported: i64,
+    pub status: String,
+    pub error: Option<String>,
+    /// How many closed-tab rows came from this batch.
+    pub imported_tabs: i64,
+    /// How many closed-window rows came from this batch.
+    pub imported_windows: i64,
+}
+
+/// Lists import batches, newest first, with the row counts that link to them.
+/// The Recently Closed "group by source file" view uses this to render the
+/// file banners.
+pub fn list_import_batches(conn: &Connection) -> Result<Vec<ImportBatchRow>> {
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.started_ms, b.finished_ms, b.source, b.source_path, b.browser, b.profile,
+                b.items_found, b.items_imported, b.status, b.error,
+                (SELECT count(*) FROM closed_tab_events t WHERE t.source_batch_id = b.id) AS tabs,
+                (SELECT count(*) FROM closed_window_events w WHERE w.source_batch_id = b.id) AS windows
+         FROM import_batches b
+         ORDER BY b.started_ms DESC, b.id DESC",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(ImportBatchRow {
+                id: r.get(0)?,
+                started_ms: r.get(1)?,
+                finished_ms: r.get(2)?,
+                source: r.get(3)?,
+                source_path: r.get(4)?,
+                browser: r.get(5)?,
+                profile: r.get(6)?,
+                items_found: r.get(7)?,
+                items_imported: r.get(8)?,
+                status: r.get(9)?,
+                error: r.get(10)?,
+                imported_tabs: r.get(11)?,
+                imported_windows: r.get(12)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

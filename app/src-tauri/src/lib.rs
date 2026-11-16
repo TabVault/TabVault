@@ -60,11 +60,12 @@ fn restore_payload_for_tabs(
 ) -> serde_json::Value {
     let entries: Vec<serde_json::Value> = tabs
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(i, t)| {
             serde_json::json!({
                 "url": t.url,
                 "pinned": t.pinned,
-                "active": false,
+                "active": i == 0,
                 "groupName": t.group_name,
                 "groupColor": t.group_color,
             })
@@ -158,6 +159,13 @@ fn recently_closed(
 }
 
 #[tauri::command]
+fn import_batches(state: tauri::State<'_, AppState>) -> Result<Vec<query::ImportBatchRow>, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    query::list_import_batches(db.conn()).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn closed_windows(
     state: tauri::State<'_, AppState>,
     browser: Option<String>,
@@ -201,44 +209,53 @@ fn restore_tabs(
     let guard = db(&state)?;
     let db = vault(&guard)?;
     let conn = db.conn();
-    let mut tabs = Vec::with_capacity(ids.len());
-    for id in ids {
-        let row = conn
-            .query_row(
-                "SELECT id, url, title, favicon, pinned, browser, profile, opened_ms,
-                        closed_ms, last_active_ms, active_ms, visit_count, group_name,
-                        group_color, window_event_id
-                 FROM closed_tab_events WHERE id = ?1",
-                [id],
-                |r| {
-                    let url: String = r.get(1)?;
-                    Ok(query::ClosedTabRow {
-                        id: r.get(0)?,
-                        title: r.get(2)?,
-                        favicon: r.get(3)?,
-                        domain: tv_core::url_util::registrable_domain(&url),
-                        url,
-                        pinned: r.get::<_, i64>(4)? != 0,
-                        browser: r.get(5)?,
-                        profile: r.get(6)?,
-                        opened_ms: r.get(7)?,
-                        closed_ms: r.get(8)?,
-                        last_active_ms: r.get(9)?,
-                        active_ms: r.get(10)?,
-                        visit_count: r.get(11)?,
-                        group_name: r.get(12)?,
-                        group_color: r.get(13)?,
-                        part_of_closed_window: false,
-                        source: "extension".to_string(),
-                        confidence: "high".to_string(),
-                        window_event_id: r.get(14)?,
-                    })
-                },
-            )
-            .map_err(|e| format!("closed tab {id} not found: {e}"))?;
-        tabs.push(tab_from_closed_row(&row));
+    // One batched query (no per-id round trips), ordered so the restored
+    // window keeps the tabs in visual order: by close time (oldest first)
+    // then by original tab index.
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, url, title, favicon, pinned, browser, profile, opened_ms,
+                closed_ms, last_active_ms, active_ms, visit_count, group_name,
+                group_color, window_event_id, source_batch_id
+         FROM closed_tab_events
+         WHERE id IN ({placeholders})
+         ORDER BY closed_ms ASC, tab_index ASC, id ASC"
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let tabs = stmt
+        .query_map(rusqlite::params_from_iter(ids.iter()), |r| {
+            let url: String = r.get(1)?;
+            Ok(query::ClosedTabRow {
+                id: r.get(0)?,
+                title: r.get(2)?,
+                favicon: r.get(3)?,
+                domain: tv_core::url_util::registrable_domain(&url),
+                url,
+                pinned: r.get::<_, i64>(4)? != 0,
+                browser: r.get(5)?,
+                profile: r.get(6)?,
+                opened_ms: r.get(7)?,
+                closed_ms: r.get(8)?,
+                last_active_ms: r.get(9)?,
+                active_ms: r.get(10)?,
+                visit_count: r.get(11)?,
+                group_name: r.get(12)?,
+                group_color: r.get(13)?,
+                part_of_closed_window: false,
+                source: "extension".to_string(),
+                confidence: "high".to_string(),
+                window_event_id: r.get(14)?,
+                source_batch_id: r.get(15)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    if tabs.is_empty() {
+        return Err("none of the selected tabs could be found in the vault".to_string());
     }
-    let payload = restore_payload_for_tabs(&tabs, mode);
+    let tab_records: Vec<TabRecord> = tabs.iter().map(tab_from_closed_row).collect();
+    let payload = restore_payload_for_tabs(&tab_records, mode);
     enqueue_restore(&db, "open_window", payload)
 }
 
@@ -384,7 +401,7 @@ fn repin_all(
             "pinned": true,
             "active": false,
             "groupName": s.group_name,
-            "groupColor": null,
+            "groupColor": s.group_color,
         })).collect::<Vec<_>>(),
         "newWindow": mode.new_window,
         "skipOpen": mode.skip_open,
@@ -451,6 +468,34 @@ fn pause_toggle(state: tauri::State<'_, AppState>) -> Result<bool, String> {
     settings.recording_paused = !settings.recording_paused;
     db.set_settings(&settings).map_err(|e| e.to_string())?;
     Ok(settings.recording_paused)
+}
+
+#[tauri::command]
+fn add_sensitive_exclusions(state: tauri::State<'_, AppState>) -> Result<Vec<String>, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    let mut settings = db.settings();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut merged: Vec<String> = Vec::new();
+    for entry in settings
+        .exclusions
+        .iter()
+        .map(|e| e.trim().to_ascii_lowercase())
+        .filter(|e| !e.is_empty())
+    {
+        if seen.insert(entry.clone()) {
+            merged.push(entry);
+        }
+    }
+    for pattern in tv_core::url_util::SENSITIVE_HOST_PATTERNS {
+        let entry = pattern.to_ascii_lowercase();
+        if seen.insert(entry.clone()) {
+            merged.push(entry);
+        }
+    }
+    settings.exclusions = merged;
+    db.set_settings(&settings).map_err(|e| e.to_string())?;
+    Ok(settings.exclusions)
 }
 
 #[tauri::command]
@@ -965,6 +1010,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dashboard,
+            import_batches,
             browser_profiles,
             recently_closed,
             closed_windows,
@@ -983,6 +1029,7 @@ pub fn run() {
             settings_get,
             settings_set,
             pause_toggle,
+            add_sensitive_exclusions,
             retention_run,
             retention_preview,
             backup_now,

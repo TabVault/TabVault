@@ -4,7 +4,7 @@
 
 - [x] **M1** — SQLite vault (WAL, SQLCipher-ready, 3 migrations), native
       messaging host, snapshot diffing/fingerprinting, retention, SNSS
-      (Session_*/Tabs_*) + mozlz4 (Firefox) parsers. 73+ unit tests green.
+      (Session_*/Tabs_*) + mozlz4 (Firefox) parsers. 76 unit tests green. Recover-from-the-past results grouped by source file in the UI.
 - [x] **M2** — Extension capture (MV3, Chrome/Edge/Firefox, polyfill),
       offline queue with flush-on-reconnect, native-host registration script
       (HKCU, all three browsers), verified live in Chrome for Testing.

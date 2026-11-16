@@ -186,8 +186,11 @@ Uninstall with `-Uninstall`.
    * History databases (`History`, `places.sqlite`) seed *visit statistics*,
      not tabs — those are labeled as history, not as open tabs.
 4. Results land in **Recently Closed** with a source badge
-   (`Chrome/Edge file`, `Firefox file`, …). Restore single tabs, a selection,
-   a whole window, or re-pin everything from the Pinned Vault.
+   (`Chrome/Edge file`, `Firefox file`, …). Toggle **Group by source file** to see
+   the same rows organized under one banner per imported file (file name, import
+   time, tabs found in file, live-capture rows under their own banner).
+   Restore single tabs, a selection, a whole window, or re-pin everything from
+   the Pinned Vault (groups are recreated with their colors).
 
 ### Limits you should know about
 

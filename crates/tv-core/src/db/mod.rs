@@ -397,7 +397,7 @@ mod tests {
             .conn()
             .query_row("SELECT max(version) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, 3);
+        assert_eq!(v, 4);
         // Re-opening must not re-run or fail.
         drop(db);
         let db = Db::open(&path, None).unwrap();
@@ -405,7 +405,7 @@ mod tests {
             .conn()
             .query_row("SELECT count(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 3);
+        assert_eq!(count, 4);
     }
 
     #[test]

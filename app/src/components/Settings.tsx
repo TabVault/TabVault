@@ -99,6 +99,18 @@ export default function Settings({ notify }: { notify: (msg: string) => void }) 
                 placeholder={'bank.com\nchase.com\n1password.com'}
               />
               <button className="btn small" onClick={saveExclusions}>Save exclusions</button>
+              <button
+                className="btn small"
+                title="Add the built-in banking / password-manager / SSO host list to your exclusions"
+                onClick={() =>
+                  void api.addSensitiveExclusions().then((merged) => {
+                    setExclusionsText(merged.join('\n'));
+                    notify(`Exclusions now cover ${merged.length} hosts.`);
+                  })
+                }
+              >
+                + Add banking &amp; password hosts
+              </button>
             </div>
           </div>
         </section>

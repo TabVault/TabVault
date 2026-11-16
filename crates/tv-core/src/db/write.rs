@@ -271,6 +271,36 @@ pub fn touch_pinned_site(
     group_name: Option<&str>,
     at_ms: i64,
 ) -> Result<()> {
+    touch_pinned_site_full(
+        conn,
+        browser,
+        profile,
+        url,
+        title,
+        favicon,
+        pinned_now,
+        group_name,
+        None,
+        at_ms,
+    )
+}
+
+/// As [`touch_pinned_site`], but also records the tab group's color.
+/// `TabRecord`s carry both, so live capture and session-file imports should
+/// use this form.
+#[allow(clippy::too_many_arguments)]
+pub fn touch_pinned_site_full(
+    conn: &Connection,
+    browser: &str,
+    profile: &str,
+    url: &str,
+    title: &str,
+    favicon: Option<&str>,
+    pinned_now: bool,
+    group_name: Option<&str>,
+    group_color: Option<&str>,
+    at_ms: i64,
+) -> Result<()> {
     let ukey = url_key(url);
     if ukey.is_empty() {
         return Ok(());
@@ -285,7 +315,8 @@ pub fn touch_pinned_site(
             pin_count = pin_count
                 + CASE WHEN ?7 = 1 AND currently_pinned = 0 THEN 1 ELSE 0 END,
             currently_pinned = ?7,
-            group_name = COALESCE(?8, group_name)
+            group_name = COALESCE(?8, group_name),
+            group_color = COALESCE(?9, group_color)
          WHERE browser = ?1 AND profile = ?2 AND url_key = ?3",
         rusqlite::params![
             browser,
@@ -296,13 +327,14 @@ pub fn touch_pinned_site(
             at_ms,
             pinned_now as i64,
             group_name,
+            group_color,
         ],
     )?;
     if updated == 0 && pinned_now {
         // First time we ever see this site pinned: start its vault entry.
         conn.execute(
-            "INSERT INTO pinned_sites (browser, profile, url, url_key, title, favicon, domain, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 1, ?10)",
+            "INSERT INTO pinned_sites (browser, profile, url, url_key, title, favicon, domain, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name, group_color)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 1, ?10, ?11)",
             rusqlite::params![
                 browser,
                 profile,
@@ -314,6 +346,7 @@ pub fn touch_pinned_site(
                 at_ms,
                 at_ms,
                 group_name,
+                group_color,
             ],
         )?;
     }
@@ -495,7 +528,7 @@ pub fn ingest_full_state(
             rusqlite::params![browser, profile, fp, payload, now],
         )?;
         for (_w, t) in filtered.all_tabs() {
-            touch_pinned_site(
+            touch_pinned_site_full(
                 conn,
                 &browser,
                 &profile,
@@ -504,6 +537,7 @@ pub fn ingest_full_state(
                 t.favicon.as_deref(),
                 t.pinned,
                 t.group_name.as_deref(),
+                t.group_color.as_deref(),
                 now,
             )?;
         }
@@ -543,7 +577,7 @@ pub fn ingest_full_state(
             closed_tabs.push(tab_to_closed_record(t, &browser, &profile, now, false));
         }
     }
-    if detect_closes && closed_tabs.len() as u64 >= settings.mass_close_tab_threshold as u64 {
+    if detect_closes && snapshot::is_mass_close(closed_tabs.len(), settings.mass_close_tab_threshold) {
         recovery_point = true;
     }
 
@@ -605,7 +639,7 @@ pub fn ingest_full_state(
 
     // Pinned vault from the filtered (surviving) state.
     for (_w, t) in filtered.all_tabs() {
-        touch_pinned_site(
+        touch_pinned_site_full(
             &tx,
             &browser,
             &profile,
@@ -614,6 +648,7 @@ pub fn ingest_full_state(
             t.favicon.as_deref(),
             t.pinned,
             t.group_name.as_deref(),
+            t.group_color.as_deref(),
             now,
         )?;
     }
@@ -640,7 +675,7 @@ pub fn ingest_full_state(
             rusqlite::params![browser, profile, cutoff],
             |r| r.get(0),
         )?;
-        if recent as u64 >= settings.mass_close_tab_threshold as u64 {
+        if snapshot::is_mass_close(recent as usize, settings.mass_close_tab_threshold) {
             recovery_point = true;
         }
         if recovery_point {
@@ -806,7 +841,7 @@ pub fn import_recovered_tabs(
             confidence: tab.confidence,
         };
         insert_closed_tab_event(&tx, &rec, None, Some(batch_id))?;
-        touch_pinned_site(
+        touch_pinned_site_full(
             &tx,
             browser,
             profile,
@@ -815,6 +850,7 @@ pub fn import_recovered_tabs(
             tab.favicon.as_deref(),
             tab.pinned,
             tab.group_name.as_deref(),
+            tab.group_color.as_deref(),
             closed_ms.unwrap_or(now),
         )?;
         stats.items_imported += 1;
@@ -867,7 +903,7 @@ pub fn import_recovered_window(
             confidence: tab.confidence,
         };
         insert_closed_tab_event(&tx, &rec, Some(event_id), Some(batch_id))?;
-        touch_pinned_site(
+        touch_pinned_site_full(
             &tx,
             browser,
             profile,
@@ -876,6 +912,7 @@ pub fn import_recovered_window(
             tab.favicon.as_deref(),
             tab.pinned,
             tab.group_name.as_deref(),
+            tab.group_color.as_deref(),
             closed,
         )?;
     }

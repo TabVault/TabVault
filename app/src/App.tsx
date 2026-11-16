@@ -10,6 +10,7 @@ import Settings from './components/Settings';
 import Recover from './components/Recover';
 import GlobalSearch from './components/GlobalSearch';
 import { api } from './api';
+import { notifyRestoreResult } from './components/restoreFeedback';
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('recently');
@@ -53,9 +54,13 @@ export default function App() {
       }
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'r') {
         e.preventDefault();
-        void api.restoreLastClosedWindow().then((job) => {
-          notify(job ? 'Restoring your most recently closed window…' : 'No closed window on record yet.');
-        });
+        void notifyRestoreResult(
+          notify,
+          api.restoreLastClosedWindow().then((id) => {
+            if (id === null) throw new Error('no closed window on record yet');
+            return id;
+          }),
+        );
         return;
       }
       if (inField) return;

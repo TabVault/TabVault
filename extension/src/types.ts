@@ -160,7 +160,4 @@ export type HostMessage =
   | { type: 'pong'; appVersion: string }
   | { type: 'host_error'; code: string; message: string };
 
-export type MassCloseBucket = {
-  tabIds: number[];
-  openedAt: number[];
-};
+

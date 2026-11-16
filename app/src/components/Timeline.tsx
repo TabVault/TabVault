@@ -5,6 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useRef } from 'react';
 import { api, type BrowserSnapshot, type RestoreMode, type SnapshotRow } from '../api';
 import { Favicon, fmtDateTime, groupColor } from './Shared';
+import { notifyRestoreResult } from './restoreFeedback';
 
 export default function Timeline({ notify }: { notify: (msg: string) => void }) {
   const [snapshots, setSnapshots] = useState<SnapshotRow[]>([]);
@@ -48,17 +49,12 @@ export default function Timeline({ notify }: { notify: (msg: string) => void }) 
 
   const restoreMode = (): RestoreMode => ({ newWindow: true, skipOpen });
 
-  const restoreAll = async () => {
+  const restoreAll = () => {
     if (!selected) return;
     setRestoring(true);
-    try {
-      await api.restoreSnapshot(selected.id, restoreMode());
-      notify('Restoring the whole snapshot in a new window…');
-    } catch (e) {
-      notify(`Restore failed: ${String(e)}`);
-    } finally {
-      setRestoring(false);
-    }
+    void notifyRestoreResult(notify, api.restoreSnapshot(selected.id, restoreMode())).finally(() =>
+      setRestoring(false),
+    );
   };
 
   const reasonLabel = (row: SnapshotRow) => {
@@ -91,7 +87,36 @@ export default function Timeline({ notify }: { notify: (msg: string) => void }) 
       </div>
 
       <div className="timeline-layout">
-        <div className="timeline-list" ref={parentRef} role="list" aria-label="Snapshots">
+        <div
+          className="timeline-list"
+          ref={parentRef}
+          role="listbox"
+          aria-label="Snapshots"
+          aria-orientation="vertical"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (snapshots.length === 0) return;
+            const idx = selected ? Math.max(0, snapshots.findIndex((s) => s.id === selected.id)) : 0;
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault();
+              const step = e.key === 'ArrowDown' ? 1 : -1;
+              const next = Math.min(snapshots.length - 1, Math.max(0, idx + step));
+              virtualizer.scrollToIndex(next, { align: 'auto' });
+              setSelected(snapshots[next]);
+            } else if (e.key === 'Home') {
+              e.preventDefault();
+              virtualizer.scrollToIndex(0, { align: 'start' });
+              setSelected(snapshots[0]);
+            } else if (e.key === 'End') {
+              e.preventDefault();
+              virtualizer.scrollToIndex(snapshots.length - 1, { align: 'end' });
+              setSelected(snapshots[snapshots.length - 1]);
+            } else if (e.key === 'Enter') {
+              e.preventDefault();
+              void restoreAll();
+            }
+          }}
+        >
           {snapshots.length === 0 && !loading ? (
             <div className="empty">
               <h3>No snapshots yet</h3>

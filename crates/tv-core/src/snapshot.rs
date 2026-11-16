@@ -249,10 +249,9 @@ pub fn is_mass_close(n_events: usize, threshold: u32) -> bool {
     n_events as u64 >= threshold as u64
 }
 
-/// Counts how many events fall inside the sliding window ending at `now_ms`.
-///
-/// `events` must be sorted ascending; we walk backwards and stop at the first
-/// out-of-window timestamp.
+/// (Retained for unit tests of the sliding-window math; the ingest path uses
+/// a SQL count against `closed_tab_events` instead.)
+#[cfg(test)]
 pub fn count_recent(events: &[i64], now_ms: i64, window_secs: u32) -> usize {
     let cutoff = now_ms - (window_secs as i64) * 1000;
     events

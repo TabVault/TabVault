@@ -39,6 +39,7 @@ export interface ClosedTabRow {
   source: string;
   confidence: string;
   windowEventId: number | null;
+  sourceBatchId: number | null;
 }
 
 export interface ClosedTabPage {
@@ -54,6 +55,7 @@ export interface ClosedTabFilter {
   dateFrom?: number;
   dateTo?: number;
   minActiveMs?: number;
+  batchId?: number;
   limit?: number;
   offset?: number;
 }
@@ -68,6 +70,7 @@ export interface ClosedWindowRow {
   pinnedCount: number;
   source: string;
   snapshotId: number | null;
+  sourceBatchId: number | null;
 }
 
 export interface SnapshotRow {
@@ -192,6 +195,22 @@ export interface DetectedProfileInfo {
   files: SessionFileInfo[];
 }
 
+export interface ImportBatchRow {
+  id: number;
+  startedMs: number;
+  finishedMs: number | null;
+  source: string;
+  sourcePath: string | null;
+  browser: string | null;
+  profile: string | null;
+  itemsFound: number;
+  itemsImported: number;
+  status: string;
+  error: string | null;
+  importedTabs: number;
+  importedWindows: number;
+}
+
 export interface ImportOutcome {
   itemsFound: number;
   itemsImported: number;
@@ -227,9 +246,11 @@ export const api = {
   settingsGet: () => invoke<Settings>('settings_get'),
   settingsSet: (settings: Settings) => invoke<void>('settings_set', { settings }),
   pauseToggle: () => invoke<boolean>('pause_toggle'),
+  addSensitiveExclusions: () => invoke<string[]>('add_sensitive_exclusions'),
   retentionRun: () => invoke<Record<string, number>>('retention_run'),
   retentionPreview: () => invoke<[number, number, number, number]>('retention_preview'),
   backupNow: () => invoke<string>('backup_now'),
+  importBatches: () => invoke<ImportBatchRow[]>('import_batches'),
   openDataFolder: () => invoke<void>('open_data_folder'),
   openUrl: (url: string) => invoke<void>('open_url', { url }),
   setEncryption: (enable: boolean) => invoke<boolean>('set_encryption', { enable }),

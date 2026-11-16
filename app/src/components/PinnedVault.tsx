@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, type PinnedSiteRow, type RestoreMode } from '../api';
 import { Favicon, fmtDate } from './Shared';
+import { notifyRestoreResult } from './restoreFeedback';
 
 export default function PinnedVault({ notify }: { notify: (msg: string) => void }) {
   const [sites, setSites] = useState<PinnedSiteRow[]>([]);
@@ -22,14 +23,9 @@ export default function PinnedVault({ notify }: { notify: (msg: string) => void 
     void load();
   }, [load]);
 
-  const repinAll = async () => {
+  const repinAll = () => {
     const mode: RestoreMode = { newWindow: true, skipOpen };
-    try {
-      await api.repinAll(mode);
-      notify('Re-pinning everything into a new window…');
-    } catch (e) {
-      notify(`Re-pin failed: ${String(e)}`);
-    }
+    void notifyRestoreResult(notify, api.repinAll(mode));
   };
 
   return (

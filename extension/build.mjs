@@ -32,6 +32,10 @@ const CHROME_KEY =
 const CHROME_EXTENSION_ID = 'fbeikljjdhlgipmpgeohjigbgdmnkeae';
 const FIREFOX_ADDON_ID = 'tabvault@tabvault';
 
+// Chrome/Edge get the full permission set including tabGroups. Firefox puts
+// tabGroups in `optional_permissions` because its tabGroups support is newer
+// and some releases ship it disabled — capture.ts guards on its presence and
+// simply records no group info when the permission is missing.
 const permissions = [
   'tabs',
   'tabGroups',
@@ -42,6 +46,7 @@ const permissions = [
   'history',
   'sessions',
 ];
+const firefoxPermissions = permissions.filter((p) => p !== 'tabGroups');
 
 const shared = {
   manifest_version: 3,
@@ -93,15 +98,15 @@ const manifests = {
   },
   firefox: {
     ...shared,
+    permissions: firefoxPermissions,
+    optional_permissions: ['tabGroups'],
     browser_specific_settings: {
       gecko: {
         id: FIREFOX_ADDON_ID,
         strict_min_version: '115.0',
       },
     },
-    background: { scripts: ['background.js'], type: 'module' },
-    // Firefox honours this for its own permission prompt ordering.
-    permissions,
+    background: { scripts: ['background.js'] },
   },
 };
 
@@ -123,7 +128,7 @@ async function main() {
       ],
       outdir: outDir,
       bundle: true,
-      format: browser === 'firefox' ? 'esm' : 'esm',
+      format: browser === 'firefox' ? 'iife' : 'esm',
       target: browser === 'firefox' ? 'firefox115' : 'chrome120',
       platform: 'browser',
       sourcemap: false,

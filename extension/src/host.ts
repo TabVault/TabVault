@@ -19,7 +19,6 @@ const HOST_NAME = 'com.tabvault.host';
 const QUEUE_KEY = 'tabvault:queue';
 const STATUS_KEY = 'tabvault:hostStatus';
 const MAX_QUEUE = 300;
-const hostVersionHint = '1.0.0';
 
 export type HostStatus = 'unknown' | 'connected' | 'disconnected';
 
@@ -230,4 +229,3 @@ class HostClient {
 }
 
 export const host = new HostClient();
-export { HOST_NAME, hostVersionHint };

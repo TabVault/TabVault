@@ -339,6 +339,17 @@ ALTER TABLE closed_window_events ADD COLUMN source_batch_id INTEGER REFERENCES i
 CREATE INDEX IF NOT EXISTS ix_closed_tabs_batch   ON closed_tab_events (source_batch_id);
 CREATE INDEX IF NOT EXISTS ix_closed_windows_batch ON closed_window_events (source_batch_id);
 "#,
+},
+Migration {
+    version: 4,
+    name: "pinned_group_color",
+    sql: r#"
+-- ---------------------------------------------------------------------------
+-- Remember the tab-group color of a pinned site, so "re-pin all" recreates
+-- groups with their original colors.
+-- ---------------------------------------------------------------------------
+ALTER TABLE pinned_sites ADD COLUMN group_color TEXT;
+"#,
 }];
 
 #[cfg(test)]

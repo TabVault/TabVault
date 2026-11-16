@@ -4,11 +4,12 @@
 //! profiles, so the recovery tool works without the user typing a single path.
 //! Everything is read-only: we inspect directory contents, never mutate.
 
+use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// A detected browser profile root.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DetectedProfile {
     /// `chrome` | `edge` | `firefox`
     pub browser: String,
@@ -348,7 +349,7 @@ pub fn chromium_local_state(profile: &DetectedProfile) -> Option<PathBuf> {
 }
 
 /// Summary row for the "Import from browser" screen.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProfileSummary {
     pub browser: String,
     pub profile_dir: String,

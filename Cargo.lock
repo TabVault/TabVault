@@ -3435,6 +3435,8 @@ dependencies = [
 name = "tabvault"
 version = "1.0.0"
 dependencies = [
+ "chrono",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",
@@ -3443,6 +3445,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tv-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

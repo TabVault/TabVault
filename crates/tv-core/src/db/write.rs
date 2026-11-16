@@ -330,13 +330,14 @@ fn insert_closed_tab_event(
     conn: &Connection,
     ev: &ClosedTabRecord,
     window_event_id: Option<i64>,
+    source_batch_id: Option<i64>,
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO closed_tab_events (
             browser, profile, url, url_key, title, favicon, pinned, tab_index, window_id,
             group_name, group_color, opened_ms, closed_ms, last_active_ms, active_ms,
-            visit_count, part_of_closed_window, source, confidence, window_event_id
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            visit_count, part_of_closed_window, source, confidence, window_event_id, source_batch_id
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         rusqlite::params![
             ev.browser,
             ev.profile,
@@ -358,6 +359,7 @@ fn insert_closed_tab_event(
             ev.source.as_str(),
             ev.confidence.as_str(),
             window_event_id,
+            source_batch_id,
         ],
     )?;
     let id = conn.last_insert_rowid();
@@ -400,11 +402,12 @@ fn insert_window_event(
     pinned_count: i64,
     snapshot_id: Option<i64>,
     source: &str,
+    source_batch_id: Option<i64>,
 ) -> Result<i64> {
     conn.execute(
         "INSERT INTO closed_window_events
-            (browser, profile, window_id, closed_ms, tab_count, pinned_count, snapshot_id, source)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            (browser, profile, window_id, closed_ms, tab_count, pinned_count, snapshot_id, source, source_batch_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
             browser,
             profile,
@@ -414,6 +417,7 @@ fn insert_window_event(
             pinned_count,
             snapshot_id,
             source,
+            source_batch_id,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -566,18 +570,19 @@ pub fn ingest_full_state(
                     pinned,
                     Some(snapshot_id),
                     "extension",
+                    None,
                 )?;
                 closed_windows += 1;
                 for t in &before_window.tabs {
                     let rec = tab_to_closed_record(t, &browser, &profile, now, true);
-                    insert_closed_tab_event(&tx, &rec, Some(event_id))?;
+                    insert_closed_tab_event(&tx, &rec, Some(event_id), None)?;
                     closed_tabs.push(rec);
                 }
             }
         }
         // Single-tab closes not attached to a window close.
         for rec in filtered_closes_only(&closed_tabs) {
-            insert_closed_tab_event(&tx, rec, None)?;
+            insert_closed_tab_event(&tx, rec, None, None)?;
         }
         if closed_windows >= 1 {
             recovery_point = true;
@@ -784,7 +789,7 @@ pub fn import_recovered_tabs(
             source: tab.source,
             confidence: tab.confidence,
         };
-        insert_closed_tab_event(&tx, &rec, None)?;
+        insert_closed_tab_event(&tx, &rec, None, Some(batch_id))?;
         touch_pinned_site(
             &tx,
             browser,
@@ -823,7 +828,7 @@ pub fn import_recovered_window(
     let tab_count = tabs.len() as i64;
     let pinned = tabs.iter().filter(|t| t.pinned).count() as i64;
     let tx = db.conn().unchecked_transaction()?;
-    let event_id = insert_window_event(&tx, browser, profile, window_id, closed, tab_count, pinned, None, source)?;
+    let event_id = insert_window_event(&tx, browser, profile, window_id, closed, tab_count, pinned, None, source, Some(batch_id))?;
     for tab in tabs {
         let rec = ClosedTabRecord {
             browser: browser.to_string(),
@@ -845,7 +850,7 @@ pub fn import_recovered_window(
             source: tab.source,
             confidence: tab.confidence,
         };
-        insert_closed_tab_event(&tx, &rec, Some(event_id))?;
+        insert_closed_tab_event(&tx, &rec, Some(event_id), Some(batch_id))?;
         touch_pinned_site(
             &tx,
             browser,
@@ -998,7 +1003,7 @@ pub fn import_session_entries(
             source: tab.source,
             confidence: tab.confidence,
         };
-        insert_closed_tab_event(&tx, &rec, None)?;
+        insert_closed_tab_event(&tx, &rec, None, None)?;
         touch_pinned_site(
             &tx,
             browser_name,

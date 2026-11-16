@@ -325,6 +325,20 @@ CREATE TABLE IF NOT EXISTS restore_requests (
 CREATE INDEX IF NOT EXISTS ix_restore_requests_status
     ON restore_requests (status, id);
 "#,
+},
+Migration {
+    version: 3,
+    name: "import_batch_linkage",
+    sql: r#"
+-- ---------------------------------------------------------------------------
+-- Link imported rows back to their import batch, so the UI can group
+-- "recovered from file X" exactly and undo a bad import wholesale.
+-- ---------------------------------------------------------------------------
+ALTER TABLE closed_tab_events    ADD COLUMN source_batch_id INTEGER REFERENCES import_batches (id) ON DELETE SET NULL;
+ALTER TABLE closed_window_events ADD COLUMN source_batch_id INTEGER REFERENCES import_batches (id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS ix_closed_tabs_batch   ON closed_tab_events (source_batch_id);
+CREATE INDEX IF NOT EXISTS ix_closed_windows_batch ON closed_window_events (source_batch_id);
+"#,
 }];
 
 #[cfg(test)]

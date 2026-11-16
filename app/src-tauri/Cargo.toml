@@ -17,13 +17,18 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2.7", features = [] }
 
 [dependencies]
-tv-core = { path = "../../crates/tv-core" }
-tauri = { version = "2.12", features = [] }
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-thiserror.workspace = true
+tv-core = { path = "../../crates/tv-core" }
+tauri = { version = "2.12", features = ["tray-icon"] }
+rusqlite = { version = "0.43", features = ["bundled-sqlcipher-vendored-openssl"] }
+chrono.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [profile.release]
 opt-level = "s"

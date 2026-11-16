@@ -232,6 +232,11 @@ export const api = {
   backupNow: () => invoke<string>('backup_now'),
   openDataFolder: () => invoke<void>('open_data_folder'),
   openUrl: (url: string) => invoke<void>('open_url', { url }),
+  setEncryption: (enable: boolean) => invoke<boolean>('set_encryption', { enable }),
+  exportJson: () => invoke<string>('export_json'),
+  exportHtml: () => invoke<string>('export_html'),
+  importSeed: () => invoke<{ itemsFound: number; itemsImported: number; batchId: number }>('import_seed'),
+  exportOpenFolder: () => invoke<void>('export_open_folder'),
   detectProfiles: () => invoke<DetectedProfileInfo[]>('detect_profiles'),
   importSessionFile: (path: string, browser: string, profile: string) =>
     invoke<ImportOutcome>('import_session_file', { path, browser, profile }),

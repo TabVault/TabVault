@@ -20,6 +20,12 @@ const CAPTURE_ALARM = 'tabvault.capture';
 const POLL_ALARM = 'tabvault.poll';
 const FLUSH_ALARM = 'tabvault.flush';
 
+// Browsers rebuild windows during startup/restore: the identical tab set is
+// closed and re-created within a second of each other. Mass-close detection
+// inside this grace window would page the user about nothing.
+const STARTUP_GRACE_MS = 20_000;
+const workerStartedAt = Date.now();
+
 // ---------------------------------------------------------------------------
 // Capture scheduling
 // ---------------------------------------------------------------------------
@@ -176,6 +182,9 @@ if (tabGroupsApi) {
 // ---------------------------------------------------------------------------
 
 async function massCloseCheck(): Promise<void> {
+  // Startup grace: while the browser is rebuilding windows, don't flag
+  // anything. Capture itself is unaffected.
+  if (Date.now() - workerStartedAt < STARTUP_GRACE_MS) return;
   const settings = await getLiveSettings();
   const threshold = settings.massCloseTabThreshold;
   const windowMs = settings.massCloseWindowSecs * 1000;

@@ -76,6 +76,7 @@ impl FirefoxTab {
             incognito: false,
             source: Source::FirefoxSessionStore,
             confidence: self.confidence,
+            browser_tab_id: None,
         }
     }
 }

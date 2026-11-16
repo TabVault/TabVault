@@ -223,6 +223,10 @@ fn run_loop() -> Result<()> {
             break;
         };
         debug_trace(&format!("frame received: {} bytes", frame.len()));
+        if std::env::var_os("TABVAULT_HOST_DEBUG").is_some() {
+            let preview: String = frame.iter().take(1200).map(|&b| if b.is_ascii_graphic() || b == b' ' { b as char } else { '.' }).collect();
+            debug_trace(&format!("frame preview: {preview}"));
+        }
         let reply = match serde_json::from_slice::<ExtensionMessage>(&frame) {
             Ok(msg) => handle_message(msg, &mut db, &mut stdout),
             Err(e) => Ok(Some(HostMessage::error(

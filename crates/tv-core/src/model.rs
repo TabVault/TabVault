@@ -125,6 +125,10 @@ pub struct TabRecord {
     pub incognito: bool,
     pub source: Source,
     pub confidence: Confidence,
+    /// Browser-assigned tab id, stable for the tab's lifetime. The extension
+    /// always sends it; session-file imports may not have one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser_tab_id: Option<String>,
 }
 
 impl TabRecord {

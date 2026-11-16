@@ -38,6 +38,7 @@ export interface TabRecord {
   incognito: boolean;
   source: Source;
   confidence: Confidence;
+  browserTabId?: string | null;
 }
 
 export interface WindowSnapshot {

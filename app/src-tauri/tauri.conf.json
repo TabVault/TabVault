@@ -31,11 +31,16 @@
     "createUpdaterArtifacts": false,
     "targets": ["nsis"],
     "icon": ["icons/icon.png"],
+    "resources": {
+      "../../target/release/tabvault-host.exe": "tabvault-host.exe",
+      "../../installer/scripts/register-native-host.ps1": "register-native-host.ps1"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,
-        "languages": ["en-US"]
+        "languages": ["English"],
+        "installerHooks": "nsis-hook.nsh"
       }
     }
   }

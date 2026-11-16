@@ -7,6 +7,7 @@
 //! crash-safety we need; the timeout turns the rare writer/writer overlap into a
 //! short wait instead of an immediate `SQLITE_BUSY`.
 
+pub mod encryption;
 pub mod query;
 pub mod schema;
 pub mod write;
@@ -246,7 +247,8 @@ pub enum VaultMode {
 
 /// Reads the DPAPI-wrapped vault key from `<db path>/../key.dpapi`.
 ///
-/// Returns hex-encoded key material suitable for `PRAGMA key`.
+/// Returns the key in SQLCipher's raw-hex form (`x<hex>`), which SQLCipher
+/// interprets as a raw 32-byte key rather than a passphrase to derive from.
 fn read_dpapi_key(db_path: &Path) -> Result<String> {
     let key_path = db_path
         .parent()
@@ -262,7 +264,8 @@ fn read_dpapi_key(db_path: &Path) -> Result<String> {
     if raw.len() < 16 {
         return Err(Error::Other("the vault key blob is too short".into()));
     }
-    Ok(raw.iter().map(|b| format!("{b:02x}")).collect())
+    let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+    Ok(format!("x{hex}"))
 }
 
 /// Opens (creating if needed) the vault, picking plain or encrypted mode from

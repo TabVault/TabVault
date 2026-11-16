@@ -119,6 +119,7 @@ export async function captureSnapshot(): Promise<BrowserSnapshot> {
       incognito,
       source: 'extension',
       confidence: 'high',
+      browserTabId: tab.id !== undefined ? String(tab.id) : null,
     };
 
     const list = byWindow.get(tab.windowId ?? 0) ?? [];

@@ -50,6 +50,7 @@ impl ChromiumHistoryRow {
             incognito: false,
             source: Source::ChromiumHistory,
             confidence: Confidence::Low,
+            browser_tab_id: None,
         }
     }
 }

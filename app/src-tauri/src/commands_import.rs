@@ -1,7 +1,7 @@
 //! "Recover from the past" commands: profile detection, session-file import,
 //! and history seeding. Extracted from lib.rs for clarity.
 
-use crate::{db, AppState};
+use crate::{db, vault, AppState};
 use serde::Serialize;
 use tv_core::db::write;
 use tv_core::model::TabRecord;
@@ -158,7 +158,8 @@ pub fn import_session_file(
     browser: String,
     profile: String,
 ) -> Result<ImportOutcome, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let file = std::path::PathBuf::from(&path);
     if !file.is_file() {
         return Err(format!("file not found: {path}"));
@@ -324,7 +325,8 @@ pub fn import_history_file(
     browser: String,
     profile: String,
 ) -> Result<ImportOutcome, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let file = std::path::PathBuf::from(&path);
     if !file.is_file() {
         return Err(format!("file not found: {path}"));

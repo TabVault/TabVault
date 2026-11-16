@@ -165,6 +165,7 @@ impl RecoveredTab {
             incognito: false,
             source: Source::ChromiumSnss,
             confidence: self.confidence,
+            browser_tab_id: None,
         }
     }
 }

@@ -4,15 +4,19 @@
 import { useEffect, useState } from 'react';
 import { api, type Settings as SettingsData } from '../api';
 
+type EncryptionState = 'off' | 'busy' | 'on';
+
 export default function Settings({ notify }: { notify: (msg: string) => void }) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [exclusionsText, setExclusionsText] = useState('');
   const [preview, setPreview] = useState<[number, number, number, number] | null>(null);
+  const [encryption, setEncryption] = useState<EncryptionState>('off');
 
   useEffect(() => {
     void api.settingsGet().then((s) => {
       setSettings(s);
       setExclusionsText(s.exclusions.join('\n'));
+      setEncryption(s.encryptionEnabled ? 'on' : 'off');
     });
     void api.retentionPreview().then(setPreview).catch(() => setPreview(null));
   }, []);
@@ -204,6 +208,51 @@ export default function Settings({ notify }: { notify: (msg: string) => void }) 
                 Back up now
               </button>
             </div>
+          </div>
+          <div className="form-row">
+            <div>
+              <div className="label">Encrypt database (DPAPI + SQLCipher)</div>
+              <div className="help">Encrypts the vault file with a key only your Windows user can unwrap. The native host reads it after your next browser restart.</div>
+            </div>
+            <button
+              className={`chip ${encryption === 'on' ? 'active' : ''}`}
+              disabled={encryption === 'busy'}
+              onClick={() => {
+                const target = encryption !== 'on';
+                setEncryption('busy');
+                void api.setEncryption(target)
+                  .then((enabled) => {
+                    setEncryption(enabled ? 'on' : 'off');
+                    notify(enabled ? 'Vault encrypted. The browser needs a restart for the host to use the key.' : 'Vault decrypted.');
+                  })
+                  .catch((e) => {
+                    setEncryption((prev) => (prev === 'busy' ? (encryption === 'on' ? 'on' : 'off') : prev));
+                    notify(`Encryption change failed: ${String(e)}`);
+                  });
+              }}
+            >
+              {encryption === 'busy' ? 'Working…' : encryption === 'on' ? 'Encrypted' : 'Not encrypted'}
+            </button>
+          </div>
+          <div className="form-row">
+            <div>
+              <div className="label">Export history</div>
+              <div className="help">JSON (machine-readable) or HTML bookmarks-style (importable anywhere).</div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn" onClick={() => void api.exportJson().then((p) => notify(`Exported to ${p}`))}>JSON</button>
+              <button className="btn" onClick={() => void api.exportHtml().then((p) => notify(`Exported to ${p}`))}>HTML</button>
+              <button className="btn small" onClick={() => void api.exportOpenFolder()}>Open folder</button>
+            </div>
+          </div>
+          <div className="form-row">
+            <div>
+              <div className="label">Import seed file</div>
+              <div className="help">Place a <code>tabvault-export</code> JSON at <code>%APPDATA%\TabVault\exports\tabvault-import.json</code> and import it here.</div>
+            </div>
+            <button className="btn" onClick={() => void api.importSeed().then((r) => notify(`Imported ${r.itemsImported} entr${r.itemsImported === 1 ? 'y' : 'ies'}.`)).catch((e) => notify(String(e)))}>
+              Import seed
+            </button>
           </div>
           <div className="form-row">
             <div>

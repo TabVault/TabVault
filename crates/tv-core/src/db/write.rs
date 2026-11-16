@@ -519,10 +519,23 @@ pub fn ingest_full_state(
         None => snapshot::SnapshotDiff::default(),
     };
 
+    // The browser rebuilds windows at startup/restore: the identical tab set
+    // reappears under a new window id. That is not a user-visible close, so it
+    // must not produce closed events or a recovery point.
+    let window_migration = prev
+        .as_ref()
+        .map(|before| snapshot::detect_window_migration(before, &filtered, &diff))
+        .unwrap_or(false);
+
     let mut recovery_point = reason.is_recovery_point();
     // Diff-detected closes only for live capture — imported recovery data has
     // its own timestamps and must not synthesize "mass close" events.
-    let detect_closes = !matches!(reason, SnapshotReason::Imported);
+    let mut effective_reason = reason;
+    if window_migration && effective_reason == SnapshotReason::MassClose {
+        effective_reason = SnapshotReason::Interval;
+        recovery_point = false;
+    }
+    let detect_closes = !matches!(reason, SnapshotReason::Imported) && !window_migration;
 
     let mut closed_tabs: Vec<ClosedTabRecord> = Vec::new();
     if detect_closes {
@@ -541,10 +554,11 @@ pub fn ingest_full_state(
         &profile,
         &fp,
         &filtered,
-        reason,
+        effective_reason,
         recovery_point,
         dropped as i64,
         now,
+        window_migration.then_some("window_migration"),
     )?;
     insert_window_and_tab_rows(&tx, snapshot_id, &browser, &profile, &filtered)?;
 
@@ -667,10 +681,11 @@ fn insert_snapshot_row(
     recovery_point: bool,
     dropped: i64,
     now_ms: i64,
+    note: Option<&str>,
 ) -> Result<i64> {
     conn.execute(
-        "INSERT INTO snapshots (taken_ms, browser, profile, fingerprint, tab_count, window_count, reason, recovery_point, dropped_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO snapshots (taken_ms, browser, profile, fingerprint, tab_count, window_count, reason, recovery_point, dropped_count, note)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         rusqlite::params![
             now_ms,
             browser,
@@ -681,6 +696,7 @@ fn insert_snapshot_row(
             reason.as_str(),
             recovery_point as i64,
             dropped,
+            note,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -982,6 +998,7 @@ pub fn import_session_entries(
             incognito: false,
             source: crate::model::Source::Import,
             confidence: crate::model::Confidence::High,
+            browser_tab_id: None,
         };
         let rec = ClosedTabRecord {
             browser: browser_name.to_string(),

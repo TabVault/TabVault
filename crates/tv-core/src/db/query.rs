@@ -398,6 +398,7 @@ pub fn snapshot_detail(conn: &Connection, snapshot_id: i64) -> Result<Option<Bro
                 incognito: r.get::<_, i64>(14)? != 0,
                 source: crate::model::Source::Extension,
                 confidence: crate::model::Confidence::High,
+                browser_tab_id: None,
             }))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

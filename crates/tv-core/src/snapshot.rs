@@ -108,12 +108,18 @@ impl SnapshotDiff {
     }
 }
 
-/// Flattens a snapshot into `(identity -> tab)` keyed by window+url+index, which
-/// is what we can rely on across process restarts where tab ids are gone.
+/// Flattens a snapshot into `(identity -> tab)`.
+///
+/// Identity prefers the browser's own tab id (stable across the tab's lifetime,
+/// across reorders and navigations). Session-file imports have no tab id, so
+/// they fall back to position + URL, which is the best a file can offer.
 fn index_tabs(snap: &BrowserSnapshot) -> std::collections::BTreeMap<String, TabRecord> {
     let mut map = std::collections::BTreeMap::new();
     for (w, t) in snap.all_tabs() {
-        let key = format!("{}\u{1}{}\u{1}{}", w.window_id, t.tab_index, t.url);
+        let key = match &t.browser_tab_id {
+            Some(id) if !id.is_empty() => format!("{}\u{1}tab:{}", w.window_id, id),
+            _ => format!("{}\u{1}{}\u{1}{}", w.window_id, t.tab_index, t.url),
+        };
         map.insert(key, t.clone());
     }
     map
@@ -130,6 +136,9 @@ pub fn diff(before: &BrowserSnapshot, after: &BrowserSnapshot) -> SnapshotDiff {
             None => out.added.push(tab.clone()),
             Some(old) => {
                 let mut fields = Vec::new();
+                if old.url != tab.url {
+                    fields.push("url");
+                }
                 if old.title != tab.title {
                     fields.push("title");
                 }
@@ -168,7 +177,73 @@ pub fn diff(before: &BrowserSnapshot, after: &BrowserSnapshot) -> SnapshotDiff {
     out
 }
 
-/// True when closing `n` tabs inside the configured window should be treated as
+// ---------------------------------------------------------------------------
+// Window migration detection
+// ---------------------------------------------------------------------------
+
+/// A "window signature" for migration detection: the ordered multiset of
+/// (url, pinned, index, group) per tab. Two windows with the same signature
+/// hold the same content, even if the browser rebuilt them under a new id.
+fn window_signature(w: &crate::model::WindowSnapshot) -> Vec<(String, bool, i64, String, String)> {
+    let mut sig: Vec<(String, bool, i64, String, String)> = w
+        .tabs
+        .iter()
+        .map(|t| {
+            (
+                t.url.clone(),
+                t.pinned,
+                t.tab_index,
+                t.group_name.clone().unwrap_or_default(),
+                t.group_color.clone().unwrap_or_default(),
+            )
+        })
+        .collect();
+    sig.sort_by_key(|(_, _, idx, _, _)| *idx);
+    sig
+}
+
+/// Detects when every window that vanished reappeared unchanged in a new id —
+/// i.e. the browser rebuilt windows (startup restore, session restore), not a
+/// user-facing mass close. Only then are close events suppressed.
+pub fn detect_window_migration(
+    before: &BrowserSnapshot,
+    after: &BrowserSnapshot,
+    diff: &SnapshotDiff,
+) -> bool {
+    if diff.windows_removed.is_empty() || diff.windows_added.is_empty() {
+        return false;
+    }
+    let added_sigs: Vec<Vec<(String, bool, i64, String, String)>> = after
+        .windows
+        .iter()
+        .filter(|w| diff.windows_added.iter().any(|id| id == &w.window_id))
+        .map(window_signature)
+        .collect();
+    let removed_sigs: Vec<Vec<(String, bool, i64, String, String)>> = before
+        .windows
+        .iter()
+        .filter(|w| diff.windows_removed.iter().any(|id| id == &w.window_id))
+        .map(window_signature)
+        .collect();
+    if removed_sigs.is_empty() || removed_sigs.len() != added_sigs.len() {
+        return false;
+    }
+    // Every removed window must find exactly one unused added window with an
+    // identical signature.
+    let mut used = vec![false; added_sigs.len()];
+    'outer: for removed in &removed_sigs {
+        for (i, added) in added_sigs.iter().enumerate() {
+            if !used[i] && added == removed {
+                used[i] = true;
+                continue 'outer;
+            }
+        }
+        return false;
+    }
+    true
+}
+
+/// True when `n` tabs closed within the configured window should be treated as
 /// a mass-close recovery point.
 pub fn is_mass_close(n_events: usize, threshold: u32) -> bool {
     n_events as u64 >= threshold as u64
@@ -375,6 +450,69 @@ mod tests {
         let d = diff(&before, &after);
         assert_eq!(d.windows_added, vec!["9".to_string()]);
         assert_eq!(d.windows_removed, vec!["1".to_string()]);
+    }
+
+    #[test]
+    fn identical_window_recreated_under_new_id_is_a_migration_not_a_close() {
+        let tab = |url: &str, index: i64| TabRecord {
+            url: url.to_string(),
+            title: url.to_string(),
+            tab_index: index,
+            pinned: false,
+            window_id: "7".to_string(),
+            source: crate::model::Source::Extension,
+            ..Default::default()
+        };
+        let mut before = snap(vec![tab("https://a.com", 0), tab("https://b.com", 1)]);
+        before.windows[0].window_id = "7".to_string();
+        let mut after = snap(vec![tab("https://a.com", 0), tab("https://b.com", 1)]);
+        after.windows[0].window_id = "9".to_string();
+
+        let d = diff(&before, &after);
+        assert_eq!(d.windows_removed, vec!["7".to_string()]);
+        assert_eq!(d.windows_added, vec!["9".to_string()]);
+        assert!(crate::snapshot::detect_window_migration(&before, &after, &d));
+    }
+
+    #[test]
+    fn partial_window_changes_are_not_a_migration() {
+        let tab = |url: &str, index: i64, id: &str| TabRecord {
+            url: url.to_string(),
+            title: url.to_string(),
+            tab_index: index,
+            window_id: id.to_string(),
+            source: crate::model::Source::Extension,
+            ..Default::default()
+        };
+        let before = BrowserSnapshot {
+            browser: "chrome".into(),
+            profile: "Default".into(),
+            windows: vec![WindowSnapshot {
+                window_id: "7".into(),
+                focused: true,
+                incognito: false,
+                tabs: vec![tab("https://a.com", 0, "7"), tab("https://b.com", 1, "7")],
+            }],
+        };
+        let after = BrowserSnapshot {
+            browser: "chrome".into(),
+            profile: "Default".into(),
+            windows: vec![WindowSnapshot {
+                window_id: "9".into(),
+                focused: true,
+                incognito: false,
+                tabs: vec![tab("https://a.com", 0, "9"), tab("https://c.com", 1, "9")],
+            }],
+        };
+        let d = diff(&before, &after);
+        assert!(!crate::snapshot::detect_window_migration(&before, &after, &d));
+    }
+
+    #[test]
+    fn no_window_change_means_no_migration() {
+        let a = snap(vec![tab("https://a.com", 0, false)]);
+        let d = diff(&a, &a);
+        assert!(!crate::snapshot::detect_window_migration(&a, &a, &d));
     }
 
     #[test]

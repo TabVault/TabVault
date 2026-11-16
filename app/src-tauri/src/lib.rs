@@ -2,7 +2,7 @@
 //! user sees. All heavy work (parsing, retention, restore enqueues) happens in
 //! `tv-core`; this module only wires it to the UI.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -10,7 +10,9 @@ use tv_core::db::{open_vault, query, write, Db};
 use tv_core::model::{BrowserSnapshot, Settings, TabRecord};
 
 pub struct AppState {
-    pub db: Mutex<Db>,
+    /// `None` only while an encryption migration is in flight; every command
+    /// surfaces a clear "busy" error in that brief window instead of crashing.
+    pub db: Mutex<Option<Db>>,
 }
 
 fn vault_path() -> Result<PathBuf, String> {
@@ -21,8 +23,15 @@ fn vault_path() -> Result<PathBuf, String> {
     Ok(PathBuf::from(appdata).join("TabVault").join("tabvault.db"))
 }
 
-fn db<'a>(state: &'a tauri::State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, Db>, String> {
+fn db<'a>(state: &'a tauri::State<'_, AppState>) -> Result<std::sync::MutexGuard<'a, Option<Db>>, String> {
     state.db.lock().map_err(|_| "database lock poisoned".to_string())
+}
+
+/// Borrow the vault, or fail fast if an encryption migration is in flight.
+fn vault<'a>(guard: &'a std::sync::MutexGuard<'_, Option<Db>>) -> Result<&'a Db, String> {
+    guard
+        .as_ref()
+        .ok_or_else(|| "vault is briefly unavailable while an encryption migration runs".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -125,13 +134,15 @@ pub(crate) fn restore_last_closed_window_impl(db: &Db) -> Result<Option<i64>, St
 
 #[tauri::command]
 fn dashboard(state: tauri::State<'_, AppState>) -> Result<query::DashboardStats, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::dashboard_stats(db.conn()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn browser_profiles(state: tauri::State<'_, AppState>) -> Result<Vec<query::BrowserProfileRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::browser_profiles(db.conn()).map_err(|e| e.to_string())
 }
 
@@ -140,7 +151,8 @@ fn recently_closed(
     state: tauri::State<'_, AppState>,
     filter: query::ClosedTabFilter,
 ) -> Result<query::ClosedTabPage, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::list_closed_tabs(db.conn(), &filter).map_err(|e| e.to_string())
 }
 
@@ -151,7 +163,8 @@ fn closed_windows(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<query::ClosedWindowRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::list_closed_windows(
         db.conn(),
         browser.as_deref(),
@@ -166,7 +179,8 @@ fn closed_window_tabs(
     state: tauri::State<'_, AppState>,
     window_event_id: i64,
 ) -> Result<Vec<query::ClosedTabRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::closed_window_tabs(db.conn(), window_event_id).map_err(|e| e.to_string())
 }
 
@@ -183,7 +197,8 @@ fn restore_tabs(
     if ids.is_empty() {
         return Err("no tabs selected".to_string());
     }
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let conn = db.conn();
     let mut tabs = Vec::with_capacity(ids.len());
     for id in ids {
@@ -232,7 +247,8 @@ fn restore_window(
     window_event_id: i64,
     mode: RestoreMode,
 ) -> Result<i64, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let tabs = query::closed_window_tabs(db.conn(), window_event_id).map_err(|e| e.to_string())?;
     if tabs.is_empty() {
         return Err("that window has no recorded tabs".to_string());
@@ -248,7 +264,8 @@ fn restore_snapshot(
     snapshot_id: i64,
     mode: RestoreMode,
 ) -> Result<i64, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let snap = query::snapshot_detail(db.conn(), snapshot_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "snapshot not found".to_string())?;
@@ -266,7 +283,8 @@ fn restore_snapshot(
 
 #[tauri::command]
 fn restore_last_closed_window(state: tauri::State<'_, AppState>) -> Result<Option<i64>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     restore_last_closed_window_impl(&db)
 }
 
@@ -274,7 +292,8 @@ fn restore_last_closed_window(state: tauri::State<'_, AppState>) -> Result<Optio
 fn recent_restore_requests(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<(i64, String, String, String, Option<i64>)>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     write::recent_restore_requests(&db, 50).map_err(|e| e.to_string())
 }
 
@@ -291,7 +310,8 @@ fn timeline(
     limit: Option<u32>,
     offset: Option<u32>,
 ) -> Result<Vec<query::SnapshotRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::list_snapshots(
         db.conn(),
         from,
@@ -308,7 +328,8 @@ fn snapshot_detail(
     state: tauri::State<'_, AppState>,
     snapshot_id: i64,
 ) -> Result<Option<BrowserSnapshot>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::snapshot_detail(db.conn(), snapshot_id).map_err(|e| e.to_string())
 }
 
@@ -323,7 +344,8 @@ fn top_sites(
     metric: String,
     limit: Option<u32>,
 ) -> Result<Vec<query::SiteStatRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::top_sites(db.conn(), &window, &metric, limit.unwrap_or(50)).map_err(|e| e.to_string())
 }
 
@@ -332,7 +354,8 @@ fn pinned_vault(
     state: tauri::State<'_, AppState>,
     browser: Option<String>,
 ) -> Result<Vec<query::PinnedSiteRow>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::list_pinned_sites(db.conn(), browser.as_deref()).map_err(|e| e.to_string())
 }
 
@@ -341,7 +364,8 @@ fn repin_all(
     state: tauri::State<'_, AppState>,
     mode: RestoreMode,
 ) -> Result<i64, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let sites = query::list_pinned_sites(db.conn(), None).map_err(|e| e.to_string())?;
     if sites.is_empty() {
         return Err("nothing pinned yet — pin something in your browser first".to_string());
@@ -373,7 +397,8 @@ fn global_search(
     query: String,
     limit: Option<u32>,
 ) -> Result<Vec<query::SearchHit>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     query::global_search(db.conn(), &query, limit.unwrap_or(30)).map_err(|e| e.to_string())
 }
 
@@ -383,19 +408,44 @@ fn global_search(
 
 #[tauri::command]
 fn settings_get(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     Ok(db.settings())
+}
+
+fn set_autostart_impl(enable: bool) {
+    #[cfg(windows)]
+    {
+        use std::process::Command;
+        let exe = match std::env::current_exe() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+        let value = format!("\"{}\"", exe.display());
+        let args: Vec<&str> = if enable {
+            vec!["add", key, "/v", "TabVault", "/t", "REG_SZ", "/d", &value, "/f"]
+        } else {
+            vec!["delete", key, "/v", "TabVault", "/f"]
+        };
+        let _ = Command::new("reg.exe").args(args).output();
+    }
 }
 
 #[tauri::command]
 fn settings_set(state: tauri::State<'_, AppState>, settings: Settings) -> Result<(), String> {
-    let db = db(&state)?;
-    db.set_settings(&settings).map_err(|e| e.to_string())
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    db.set_settings(&settings).map_err(|e| e.to_string())?;
+    // Best-effort: keep the Windows Run key in sync with the toggle.
+    set_autostart_impl(settings.start_with_windows);
+    Ok(())
 }
 
 #[tauri::command]
 fn pause_toggle(state: tauri::State<'_, AppState>) -> Result<bool, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let mut settings = db.settings();
     settings.recording_paused = !settings.recording_paused;
     db.set_settings(&settings).map_err(|e| e.to_string())?;
@@ -404,19 +454,22 @@ fn pause_toggle(state: tauri::State<'_, AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 fn retention_run(state: tauri::State<'_, AppState>) -> Result<std::collections::BTreeMap<String, usize>, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     write::apply_retention(&db, tv_core::time::now_ms()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn retention_preview(state: tauri::State<'_, AppState>) -> Result<(usize, usize, usize, usize), String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     write::preview_retention(&db, tv_core::time::now_ms()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn backup_now(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    let db = db(&state)?;
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
     let dir = vault_path()?
         .parent()
         .map(|p| p.join("backups"))
@@ -439,6 +492,262 @@ fn open_url(url: String) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn exports_dir() -> Result<PathBuf, String> {
+    let dir = vault_path()?
+        .parent()
+        .map(|p| p.join("exports"))
+        .ok_or_else(|| "vault path has no parent".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir)
+}
+
+#[tauri::command]
+fn export_json(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let path = exports_dir()?.join(format!("tabvault-export-{stamp}.json"));
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT url, title, favicon, pinned, tab_index, browser, profile, opened_ms,
+                    closed_ms, group_name, group_color, active_ms, visit_count, source,
+                    confidence, window_event_id
+             FROM closed_tab_events ORDER BY closed_ms DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            let url: String = r.get(0)?;
+            Ok(serde_json::json!({
+                "url": url,
+                "title": r.get::<_, String>(1)?,
+                "favicon": r.get::<_, Option<String>>(2)?,
+                "pinned": r.get::<_, i64>(3)? != 0,
+                "tabIndex": r.get::<_, i64>(4)?,
+                "browser": r.get::<_, String>(5)?,
+                "profile": r.get::<_, String>(6)?,
+                "openedMs": r.get::<_, Option<i64>>(7)?,
+                "closedMs": r.get::<_, i64>(8)?,
+                "groupName": r.get::<_, Option<String>>(9)?,
+                "groupColor": r.get::<_, Option<String>>(10)?,
+                "activeMs": r.get::<_, i64>(11)?,
+                "visitCount": r.get::<_, i64>(12)?,
+                "source": r.get::<_, String>(13)?,
+                "confidence": r.get::<_, String>(14)?,
+                "windowEventId": r.get::<_, Option<i64>>(15)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    let items: Vec<serde_json::Value> = rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?;
+    drop(stmt);
+
+    let windows: Vec<serde_json::Value> = {
+        let mut stmt = db
+            .conn()
+            .prepare(
+                "SELECT id, browser, profile, closed_ms, tab_count, pinned_count, source, window_id
+                 FROM closed_window_events ORDER BY closed_ms DESC",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(serde_json::json!({
+                    "id": r.get::<_, i64>(0)?,
+                    "browser": r.get::<_, String>(1)?,
+                    "profile": r.get::<_, String>(2)?,
+                    "closedMs": r.get::<_, i64>(3)?,
+                    "tabCount": r.get::<_, i64>(4)?,
+                    "pinnedCount": r.get::<_, i64>(5)?,
+                    "source": r.get::<_, String>(6)?,
+                    "windowId": r.get::<_, String>(7)?,
+                }))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>().map_err(|e| e.to_string())?
+    };
+
+    let payload = serde_json::json!({
+        "format": "tabvault-export",
+        "version": 1,
+        "exportedAt": chrono::Utc::now().to_rfc3339(),
+        "stats": {
+            "closedTabs": items.len(),
+            "closedWindows": windows.len(),
+        },
+        "closedTabs": items,
+        "closedWindows": windows,
+    });
+    std::fs::write(&path, serde_json::to_vec_pretty(&payload).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+#[tauri::command]
+fn export_html(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let path = exports_dir()?.join(format!("tabvault-bookmarks-{stamp}.html"));
+    let mut stmt = db
+        .conn()
+        .prepare(
+            "SELECT url, title, closed_ms FROM closed_tab_events ORDER BY closed_ms DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?))
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut html = String::from(
+        "<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">\n<TITLE>TabVault Export</TITLE>\n<H1>TabVault Export</H1>\n<DL><p>\n    <DT><H3>Recently Closed</H3>\n    <DL><p>\n",
+    );
+    for row in rows {
+        let (url, title, closed_ms) = row.map_err(|e| e.to_string())?;
+        let title = if title.is_empty() { &url } else { &title };
+        let safe_title = html_escape(title);
+        let safe_url = html_escape(&url);
+        html.push_str(&format!(
+            "        <DT><A HREF=\"{safe_url}\" ADD_DATE=\"{}\">{safe_title}</A>\n",
+            closed_ms / 1000
+        ));
+    }
+    html.push_str("    </DL><p>\n</DL><p>\n");
+    std::fs::write(&path, html).map_err(|e| e.to_string())?;
+    Ok(path.display().to_string())
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+#[tauri::command]
+fn export_open_folder() -> Result<(), String> {
+    let dir = exports_dir()?;
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer.exe")
+            .arg(&dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn import_seed(state: tauri::State<'_, AppState>) -> Result<ImportSeedOutcome, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    let dir = exports_dir()?;
+    let path = dir.join("tabvault-import.json");
+    if !path.is_file() {
+        return Err(format!(
+            "Put your seed file at {} and try again.\nFormat: {{\"format\":\"tabvault-export\",\"version\":1,\"closedTabs\":[{{\"url\":\"...\",\"title\":\"...\",\"pinned\":false,...}}]}}\n(Any exported tabvault-export JSON works too.)",
+            path.display()
+        ));
+    }
+    let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| format!("not valid JSON: {e}"))?;
+    let tabs = value
+        .get("closedTabs")
+        .and_then(|t| t.as_array())
+        .cloned()
+        .ok_or_else(|| "seed has no \"closedTabs\" array".to_string())?;
+
+    let batch_id = write::begin_import_batch(db, "seed_json", Some(&path), Some("seed"), Some("seed"))
+        .map_err(|e| e.to_string())?;
+    let mut found = 0usize;
+    let mut imported = 0usize;
+    for entry in tabs {
+        found += 1;
+        let url = entry.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if url.is_empty() {
+            continue;
+        }
+        let mut tab: TabRecord = serde_json::from_value(entry).unwrap_or_else(|_| TabRecord {
+            url: url.clone(),
+            title: String::new(),
+            ..Default::default()
+        });
+        tab.source = tv_core::model::Source::Import;
+        tab.confidence = tv_core::model::Confidence::Medium;
+        let closed_ms = tab.closed_ms.or(Some(tv_core::time::now_ms()));
+        let stats = write::import_recovered_tabs(db, batch_id, "seed_json", "seed", "seed", &[(tab, closed_ms)], false)
+            .map_err(|e| e.to_string())?;
+        imported += stats.items_imported;
+    }
+    write::finish_import_batch(db, batch_id, None).map_err(|e| e.to_string())?;
+    Ok(ImportSeedOutcome {
+        items_found: found,
+        items_imported: imported,
+        batch_id,
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportSeedOutcome {
+    pub items_found: usize,
+    pub items_imported: usize,
+    pub batch_id: i64,
+}
+
+#[tauri::command]
+fn set_encryption(state: tauri::State<'_, AppState>, enable: bool) -> Result<bool, String> {
+    let db_path = vault_path()?;
+    // Idempotent: already in the desired state → no-op success.
+    if tv_core::db::encryption::is_encrypted(&db_path) == enable {
+        return Ok(enable);
+    }
+
+    let mut guard = state.db.lock().map_err(|_| "database lock poisoned".to_string())?;
+
+    // Take the live connection out of the state and drop it, so the migration
+    // can rename the file. The migration is built to leave the vault intact on
+    // any failure before the final swap; after the swap the new file has been
+    // verified, so reopening it here is safe.
+    let old_db = guard.take().ok_or("the vault is unavailable")?;
+    drop(old_db);
+
+    let outcome = if enable {
+        tv_core::db::encryption::enable_encryption(&db_path)
+    } else {
+        tv_core::db::encryption::disable_encryption(&db_path)
+    };
+
+    match &outcome {
+        Ok(()) => {
+            let new_db = open_vault(&db_path).map_err(|e| {
+                tracing::error!("failed to reopen the vault after encryption migration: {e}");
+                e.to_string()
+            })?;
+            *guard = Some(new_db);
+            Ok(enable)
+        }
+        Err(e) => {
+            // Migration failed; it leaves either the plaintext vault or the
+            // intact DPAPI-keyed encrypted vault in place by its own contract.
+            // Reopen whatever is at db_path now so the app keeps working.
+            tracing::warn!("encryption migration failed: {e}");
+            match open_vault(&db_path) {
+                Ok(new_db) => {
+                    *guard = Some(new_db);
+                    Err(e.to_string())
+                }
+                Err(e2) => {
+                    tracing::error!("could not reopen the vault after a failed migration: {e2}");
+                    Err(format!("{e}; additionally, the vault could not be reopened: {e2}"))
+                }
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -519,7 +828,67 @@ pub fn run() {
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
             let _ = db.integrity_check();
             app.manage(AppState {
-                db: Mutex::new(db),
+                db: Mutex::new(Some(db)),
+            });
+
+            // Auto-backup: check hourly; back up when the last copy is older
+            // than 24h, then prune to `backup_keep` copies. Runs on its own
+            // connection so the UI thread never blocks on I/O.
+            std::thread::spawn(|| {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(3600));
+                    let path = match vault_path() {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    let db = match open_vault(&path) {
+                        Ok(d) => d,
+                        Err(_) => continue,
+                    };
+                    let settings = db.settings();
+                    if !settings.daily_backup {
+                        continue;
+                    }
+                    let last: i64 = db
+                        .conn()
+                        .query_row(
+                            "SELECT COALESCE(MAX(CAST(value AS INTEGER)), 0) FROM settings WHERE key = 'last_backup_ms'",
+                            [],
+                            |r| r.get::<_, i64>(0),
+                        )
+                        .unwrap_or(0);
+                    let now = tv_core::time::now_ms();
+                    if now - last < 24 * 3600 * 1000 {
+                        continue;
+                    }
+                    let backup_dir = path.parent().map(|p| p.join("backups")).unwrap_or_else(|| PathBuf::from("."));
+                    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                    let dest = backup_dir.join(format!("tabvault-{stamp}.db"));
+                    if write::backup_database(&db, &dest).is_ok() {
+                        let _ = db.set_setting("last_backup_ms", &now);
+                        // Prune old backups, keeping the newest `backup_keep`.
+                        if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+                            let mut files: Vec<_> = entries
+                                .filter_map(|e| e.ok())
+                                .filter(|e| e.file_name().to_string_lossy().starts_with("tabvault-"))
+                                .collect();
+                            files.sort_by_key(|e| {
+                                e.metadata()
+                                    .and_then(|m| m.modified())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                            });
+                            let keep = settings.backup_keep as usize;
+                            while files.len() > keep {
+                                if let Some(oldest) = files.first() {
+                                    let _ = std::fs::remove_file(oldest.path());
+                                    files.remove(0);
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             });
 
             // Tray icon with the essentials.
@@ -617,6 +986,11 @@ pub fn run() {
             retention_preview,
             backup_now,
             open_data_folder,
+            export_json,
+            export_html,
+            export_open_folder,
+            import_seed,
+            set_encryption,
             open_url,
             detect_profiles,
             import_session_file,

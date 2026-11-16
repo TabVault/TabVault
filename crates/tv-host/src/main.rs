@@ -32,6 +32,24 @@ const MAX_MESSAGE: u32 = 64 * 1024 * 1024;
 const RESTORE_POLL_LIMIT: u32 = 10;
 
 fn main() {
+    // Optional: file-based startup trace for diagnosing launch issues from the
+    // browser (it gives the host no console). Off unless TABVAULT_HOST_DEBUG=1.
+    if std::env::var_os("TABVAULT_HOST_DEBUG").is_some() {
+        let args: Vec<String> = std::env::args().collect();
+        let line = format!(
+            "{:?} pid={} args={:?} TABVAULT_DB={:?}\n",
+            std::time::SystemTime::now(),
+            std::process::id(),
+            args,
+            std::env::var_os("TABVAULT_DB"),
+        );
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(std::env::temp_dir().join("tabvault-host-debug.log"))
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+
     // Native-messaging hosts are usually run with no console window; logging is
     // best-effort on both Windows and Unix.
     let _ = tracing_subscriber::fmt()
@@ -49,8 +67,16 @@ fn main() {
         Some("--selftest") => {
             std::process::exit(selftest());
         }
+        // The browser launches us with the caller's origin as argv[1]
+        // ("chrome-extension://<id>/" or "moz-extension://<id>/") followed by
+        // "--parent-window=<hwnd>". That is the normal case — not an error.
+        Some(origin)
+            if origin.starts_with("chrome-extension://")
+                || origin.starts_with("moz-extension://")
+                || origin.starts_with("edge-extension://") => {}
         Some(other) => {
             eprintln!("[{APP_NAME}] unknown argument: {other}");
+            eprintln!("usage: tabvault-host [--selftest] [--version]");
             std::process::exit(2);
         }
         None => {}
@@ -149,6 +175,19 @@ fn write_frame(stdout: &mut std::io::Stdout, msg: &HostMessage) -> Result<()> {
     Ok(())
 }
 
+/// TEMP DEBUG: append one line to the startup trace file.
+fn debug_trace(stage: &str) {
+    if std::env::var_os("TABVAULT_HOST_DEBUG").is_none() {
+        return;
+    }
+    let line = format!("{:?} pid={} {stage}\n", std::time::SystemTime::now(), std::process::id());
+    let _ = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(std::env::temp_dir().join("tabvault-host-debug.log"))
+        .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+}
+
 /// Opens the vault; on encryption failure we must NOT silently fall back to a
 /// plaintext file, so we surface the error to the extension and exit.
 fn open_or_report(stdout: &mut std::io::Stdout) -> Result<tv_core::db::Db> {
@@ -175,11 +214,15 @@ fn run_loop() -> Result<()> {
     // Open lazily on the first message so that a bare `--version` invocation
     // (used by the installer) never touches the database.
     let mut db = open_or_report(&mut stdout)?;
+    debug_trace("vault opened");
 
     loop {
+        debug_trace("waiting for frame");
         let Some(frame) = read_frame(&mut stdin)? else {
+            debug_trace("stdin closed (clean exit)");
             break;
         };
+        debug_trace(&format!("frame received: {} bytes", frame.len()));
         let reply = match serde_json::from_slice::<ExtensionMessage>(&frame) {
             Ok(msg) => handle_message(msg, &mut db, &mut stdout),
             Err(e) => Ok(Some(HostMessage::error(

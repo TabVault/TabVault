@@ -22,7 +22,7 @@ pub struct LiveAppSettings {
 
 /// Messages the extension can send to the host.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ExtensionMessage {
     /// Extension identifies itself on connect.
     Hello {
@@ -75,7 +75,7 @@ fn default_poll_limit() -> u32 {
 
 /// Messages the host can send to the extension.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum HostMessage {
     /// Sent in reply to `hello`.
     HelloAck {

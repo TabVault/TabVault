@@ -276,31 +276,47 @@ pub fn touch_pinned_site(
         return Ok(());
     }
     let domain = url_util::registrable_domain(url);
-    conn.execute(
-        "INSERT INTO pinned_sites (browser, profile, url, url_key, title, favicon, domain, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?11)
-         ON CONFLICT(browser, profile, url_key) DO UPDATE SET
-            title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE pinned_sites.title END,
-            favicon = COALESCE(excluded.favicon, pinned_sites.favicon),
-            last_pinned_ms = MAX(pinned_sites.last_pinned_ms, excluded.last_pinned_ms),
-            pin_count = pinned_sites.pin_count
-                + CASE WHEN excluded.currently_pinned = 1 AND pinned_sites.currently_pinned = 0 THEN 1 ELSE 0 END,
-            currently_pinned = excluded.currently_pinned,
-            group_name = COALESCE(excluded.group_name, pinned_sites.group_name)",
+    // Update an existing row first; only pinned sites ever get a row.
+    let updated = conn.execute(
+        "UPDATE pinned_sites SET
+            title = CASE WHEN ?4 <> '' THEN ?4 ELSE title END,
+            favicon = COALESCE(?5, favicon),
+            last_pinned_ms = MAX(last_pinned_ms, ?6),
+            pin_count = pin_count
+                + CASE WHEN ?7 = 1 AND currently_pinned = 0 THEN 1 ELSE 0 END,
+            currently_pinned = ?7,
+            group_name = COALESCE(?8, group_name)
+         WHERE browser = ?1 AND profile = ?2 AND url_key = ?3",
         rusqlite::params![
             browser,
             profile,
-            url,
             ukey,
             title,
             favicon,
-            domain,
-            at_ms,
             at_ms,
             pinned_now as i64,
             group_name,
         ],
     )?;
+    if updated == 0 && pinned_now {
+        // First time we ever see this site pinned: start its vault entry.
+        conn.execute(
+            "INSERT INTO pinned_sites (browser, profile, url, url_key, title, favicon, domain, first_pinned_ms, last_pinned_ms, pin_count, currently_pinned, group_name)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, 1, ?10)",
+            rusqlite::params![
+                browser,
+                profile,
+                url,
+                ukey,
+                title,
+                favicon,
+                domain,
+                at_ms,
+                at_ms,
+                group_name,
+            ],
+        )?;
+    }
     Ok(())
 }
 

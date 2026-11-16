@@ -16,7 +16,12 @@ is recorded so a restore can reproduce the session faithfully — including
 ## `tabGroups`
 
 Tab groups are recorded with their name and color so a restored window comes
-back *organized*, not as a flat pile of 200 tabs.
+back *organized*, not as a flat pile of 200 tabs. Split across two APIs:
+`tabs.group` creates the group and `tabGroups.update` names/colors it — both
+are needed and both are used only during restore. In Chrome and Edge this is a
+required permission; in Firefox it ships as `optional_permissions`, so the
+extension installs there even on builds without group support (groups are
+silently skipped — everything else works).
 
 ## `storage`
 

@@ -1,5 +1,37 @@
 # TabVault — Plan
 
+## Status (M0–M6 build complete and verified end-to-end)
+
+- [x] **M1** — SQLite vault (WAL, SQLCipher-ready, 3 migrations), native
+      messaging host, snapshot diffing/fingerprinting, retention, SNSS
+      (Session_*/Tabs_*) + mozlz4 (Firefox) parsers. 73+ unit tests green.
+- [x] **M2** — Extension capture (MV3, Chrome/Edge/Firefox, polyfill),
+      offline queue with flush-on-reconnect, native-host registration script
+      (HKCU, all three browsers), verified live in Chrome for Testing.
+- [x] **M3** — Tauri tray app: Recently Closed, Timeline, Pinned Vault, Most
+      Used, Ctrl+K global search, Ctrl+Alt+R restore-hotkey, tray menu,
+      virtualized lists.
+- [x] **M4** — Recovery from the past: auto-detects Chrome/Edge/Firefox
+      profiles, parses SNSS (v3 cleartext verified against real files; v5
+      encrypted v20 App-Bound detected and reported, not silently empty),
+      mozlz4 sessionstore, history DBs — locked-file copy protocol.
+- [x] **M5** — Installer: `TabVault_1.0.0_x64-setup.exe` (NSIS, per-user
+      install) with native-host registration hook; portable registration
+      script.
+- [x] **M6** — Encryption at rest (DPAPI-wrapped SQLCipher key), daily backup,
+      autostart, retention, exports (JSON/HTML), import seed, settings UI.
+
+### Verified end-to-end on this machine
+
+- Live capture → vault → restore job → extension reopens window with pins.
+- Offline queue: events queued while host is down; all flush on reconnect.
+- Mass-close detection suppressed at browser startup (window-migration fix);
+  true mass closes still flag recovery points.
+- Tab identity by browser tab id — no phantom closes on tab reorder.
+- Recovered real session files on this machine: 72 tabs / 24 windows from
+  Chrome's `Tabs_*`, closed windows grouped with close timestamps.
+- Full docs: README, PERMISSIONS, MANUAL-TEST-PLAN.
+
 ## Stack decision: Tauri 2 + React 19 + TypeScript (not Electron)
 
 | Criterion | Tauri 2 | Electron |

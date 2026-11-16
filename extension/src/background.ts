@@ -156,11 +156,18 @@ browser.windows.onCreated.addListener(() => {
 });
 
 browser.windows.onRemoved.addListener((_windowId) => {
-  // A window closing usually implies many tab closes; the mass-close check
-  // will see them via onRemoved for each tab.
-  void recordClose();
-  void massCloseCheck();
-  scheduleCapture();
+  // A window closing usually implies many tab closes. The tabs are already
+  // gone at this point, so capture synchronously instead of debouncing: when
+  // the browser is exiting (Alt+F4 / window X / File > Exit) the service
+  // worker may be torn down before a 1.5 s debounce fires, and the close
+  // would otherwise never reach the vault.
+  void (async () => {
+    await recordClose();
+    const settings = await getLiveSettings();
+    const count = await recentCloseCount(settings.massCloseWindowSecs * 1000);
+    await capture(count >= settings.massCloseTabThreshold ? 'mass_close' : 'tab_closed');
+    await massCloseCheck();
+  })();
 });
 
 const tabGroupsApi = (browser as unknown as {
@@ -181,6 +188,11 @@ if (tabGroupsApi) {
 // Mass-close detection (in addition to the host's)
 // ---------------------------------------------------------------------------
 
+// Rate-limit the mass-close toast so one Alt+F4 with many tabs produces ONE
+// notification, not one per closed tab.
+let lastMassCloseToastAt = 0;
+const MASS_CLOSE_TOAST_COOLDOWN_MS = 15_000;
+
 async function massCloseCheck(): Promise<void> {
   // Startup grace: while the browser is rebuilding windows, don't flag
   // anything. Capture itself is unaffected.
@@ -194,7 +206,8 @@ async function massCloseCheck(): Promise<void> {
     // notifies the user. We also notify ourselves so it works pre-host-install.
     pendingCloses = Math.max(pendingCloses, count);
     await capture('mass_close');
-    if (settings.notifyOnMassClose) {
+    if (settings.notifyOnMassClose && Date.now() - lastMassCloseToastAt > MASS_CLOSE_TOAST_COOLDOWN_MS) {
+      lastMassCloseToastAt = Date.now();
       try {
         await browser.notifications.create({
           type: 'basic',

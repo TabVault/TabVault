@@ -15,7 +15,7 @@
 use crate::db::{url_key, url_words, Db};
 use crate::error::Result;
 use crate::model::{
-    BrowserSnapshot, Confidence, SnapshotMeta, SnapshotReason, Source, TabRecord,
+    BrowserSnapshot, Confidence, Settings, SnapshotMeta, SnapshotReason, Source, TabRecord,
 };
 use crate::retention;
 use crate::snapshot;
@@ -475,6 +475,166 @@ pub struct IngestReport {
 /// The order of operations matters: pause/exclusions first, then dedupe, then
 /// storage, then close detection, then stats — so a re-ingested identical state
 /// performs no work at all.
+/// Detects closes and writes their events. Shared by the full-write path and
+/// the fingerprint-dedupe path — a deduped ingest still must not lose closes.
+///
+/// Returns the extracted closed-tab records and number of closed windows.
+fn detect_and_insert_closes(
+    tx: &rusqlite::Transaction<'_>,
+    prev: Option<&BrowserSnapshot>,
+    diff: &snapshot::SnapshotDiff,
+    detect_closes: bool,
+    snapshot_id: Option<i64>,
+    now: i64,
+    browser: &str,
+    profile: &str,
+) -> Result<(Vec<ClosedTabRecord>, usize)> {
+    let mut closed_tabs: Vec<ClosedTabRecord> = Vec::new();
+    let mut closed_windows = 0usize;
+    if !detect_closes {
+        return Ok((closed_tabs, closed_windows));
+    }
+    // Diff-detected closes. Tabs that belonged to a removed window are
+    // recorded by the window-close branch below — pushing them here too
+    // would double-count every tab of a closing window.
+    let removed_window_ids: std::collections::HashSet<&str> =
+        diff.windows_removed.iter().map(|s| s.as_str()).collect();
+    for t in &diff.removed {
+        if !removed_window_ids.contains(t.window_id.as_str()) {
+            closed_tabs.push(tab_to_closed_record(t, browser, profile, now, false));
+        }
+    }
+    // Closed windows first, then the tabs that went with them.
+    let before = prev.cloned().unwrap_or_default();
+    for before_window in &before.windows {
+        if diff
+            .windows_removed
+            .iter()
+            .any(|id| id == &before_window.window_id)
+        {
+            let tab_count = before_window.tabs.len() as i64;
+            let pinned = before_window.tabs.iter().filter(|t| t.pinned).count() as i64;
+            let event_id = insert_window_event(
+                tx,
+                browser,
+                profile,
+                &before_window.window_id,
+                now,
+                tab_count,
+                pinned,
+                snapshot_id,
+                "extension",
+                None,
+            )?;
+            closed_windows += 1;
+            for t in &before_window.tabs {
+                let rec = tab_to_closed_record(t, browser, profile, now, true);
+                insert_closed_tab_event(tx, &rec, Some(event_id), None)?;
+                closed_tabs.push(rec);
+            }
+        }
+    }
+    // Single-tab closes not attached to a window close.
+    for rec in &closed_tabs {
+        if !rec.part_of_closed_window {
+            insert_closed_tab_event(tx, rec, None, None)?;
+        }
+    }
+    Ok((closed_tabs, closed_windows))
+}
+
+/// The mass-close promotion rule: if enough closed events exist in the recent
+/// sliding window, flag the snapshot as a recovery point and mark it so.
+/// Returns whether a recovery point was promoted.
+fn promote_mass_close_point(
+    tx: &rusqlite::Transaction<'_>,
+    browser: &str,
+    profile: &str,
+    now: i64,
+    settings: &Settings,
+    detect_closes: bool,
+    snapshot_id: Option<i64>,
+) -> Result<bool> {
+    if !detect_closes {
+        return Ok(false);
+    }
+    let window_ms = settings.mass_close_window_secs as i64 * 1000;
+    let cutoff = now - window_ms;
+    let recent: i64 = tx.query_row(
+        "SELECT count(*) FROM closed_tab_events
+         WHERE browser = ?1 AND profile = ?2 AND closed_ms >= ?3",
+        rusqlite::params![browser, profile, cutoff],
+        |r| r.get(0),
+    )?;
+    if !snapshot::is_mass_close(recent as usize, settings.mass_close_tab_threshold) {
+        return Ok(false);
+    }
+    if let Some(id) = snapshot_id {
+        tx.execute(
+            "UPDATE snapshots SET recovery_point = 1, reason = ?1 WHERE id = ?2",
+            rusqlite::params![SnapshotReason::MassClose.as_str(), id],
+        )?;
+    }
+    Ok(true)
+}
+
+/// Flags a snapshot row as a recovery point (reason → mass_close).
+fn flag_recovery_point(
+    conn: &Connection,
+    snapshot_id: i64,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE snapshots SET recovery_point = 1, reason = ?1 WHERE id = ?2",
+        rusqlite::params![SnapshotReason::MassClose.as_str(), snapshot_id],
+    )?;
+    Ok(())
+}
+
+fn touch_pinned_vault(
+    tx: &rusqlite::Transaction<'_>,
+    filtered: &BrowserSnapshot,
+    browser: &str,
+    profile: &str,
+    now: i64,
+) -> Result<()> {
+    for (_w, t) in filtered.all_tabs() {
+        touch_pinned_site_full(
+            tx,
+            browser,
+            profile,
+            &t.url,
+            &t.title,
+            t.favicon.as_deref(),
+            t.pinned,
+            t.group_name.as_deref(),
+            t.group_color.as_deref(),
+            now,
+        )?;
+    }
+    Ok(())
+}
+
+fn write_live_state(
+    tx: &rusqlite::Transaction<'_>,
+    browser: &str,
+    profile: &str,
+    fingerprint: &str,
+    filtered: &BrowserSnapshot,
+    now: i64,
+) -> Result<()> {
+    let payload = serde_json::to_string(filtered)?;
+    tx.execute(
+        "INSERT INTO live_state (browser, profile, fingerprint, payload, updated_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(browser, profile) DO UPDATE SET
+            fingerprint = excluded.fingerprint,
+            payload = excluded.payload,
+            updated_ms = excluded.updated_ms",
+        rusqlite::params![browser, profile, fingerprint, payload, now],
+    )?;
+    Ok(())
+}
+
 pub fn ingest_full_state(
     db: &Db,
     snap: &BrowserSnapshot,
@@ -508,46 +668,6 @@ pub fn ingest_full_state(
         .ok()
         .and_then(|json| serde_json::from_str(&json).ok());
 
-    // Fast dedupe: identical state → no snapshot row.
-    let existing_snapshot: Option<i64> = conn
-        .query_row(
-            "SELECT id FROM snapshots WHERE browser = ?1 AND profile = ?2 AND fingerprint = ?3",
-            rusqlite::params![browser, profile, fp],
-            |r| r.get(0),
-        )
-        .ok();
-    if let Some(id) = existing_snapshot {
-        let payload = serde_json::to_string(&filtered)?;
-        conn.execute(
-            "INSERT INTO live_state (browser, profile, fingerprint, payload, updated_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(browser, profile) DO UPDATE SET
-                fingerprint = excluded.fingerprint,
-                payload = excluded.payload,
-                updated_ms = excluded.updated_ms",
-            rusqlite::params![browser, profile, fp, payload, now],
-        )?;
-        for (_w, t) in filtered.all_tabs() {
-            touch_pinned_site_full(
-                conn,
-                &browser,
-                &profile,
-                &t.url,
-                &t.title,
-                t.favicon.as_deref(),
-                t.pinned,
-                t.group_name.as_deref(),
-                t.group_color.as_deref(),
-                now,
-            )?;
-        }
-        return Ok(IngestReport {
-            outcome: IngestOutcome::Unchanged { snapshot_id: id },
-            closed_tabs: Vec::new(),
-            closed_windows: 0,
-        });
-    }
-
     let diff = match &prev {
         Some(before) => snapshot::diff(before, &filtered),
         None => snapshot::SnapshotDiff::default(),
@@ -571,14 +691,47 @@ pub fn ingest_full_state(
     }
     let detect_closes = !matches!(reason, SnapshotReason::Imported) && !window_migration;
 
-    let mut closed_tabs: Vec<ClosedTabRecord> = Vec::new();
-    if detect_closes {
-        for t in &diff.removed {
-            closed_tabs.push(tab_to_closed_record(t, &browser, &profile, now, false));
-        }
-    }
-    if detect_closes && snapshot::is_mass_close(closed_tabs.len(), settings.mass_close_tab_threshold) {
+    if detect_closes && snapshot::is_mass_close(diff.removed.len(), settings.mass_close_tab_threshold) {
         recovery_point = true;
+    }
+
+    // Fast dedupe: identical state → no snapshot row. Closed-tab events are
+    // STILL detected on this path: the browser may report a state that matches
+    // an earlier snapshot while tabs were closed since the last live state.
+    let existing_snapshot: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM snapshots WHERE browser = ?1 AND profile = ?2 AND fingerprint = ?3",
+            rusqlite::params![browser, profile, fp],
+            |r| r.get(0),
+        )
+        .ok();
+    if let Some(id) = existing_snapshot {
+        let tx = db.conn().unchecked_transaction()?;
+        let (closed_tabs, closed_windows) = detect_and_insert_closes(
+            &tx,
+            prev.as_ref(),
+            &diff,
+            detect_closes,
+            None, // dedupe path has no fresh snapshot row to link
+            now,
+            &browser,
+            &profile,
+        )?;
+        if closed_windows >= 1 {
+            recovery_point = true;
+        }
+        promote_mass_close_point(&tx, &browser, &profile, now, &settings, detect_closes, Some(id))?;
+        if recovery_point {
+            flag_recovery_point(&tx, id)?;
+        }
+        touch_pinned_vault(&tx, &filtered, &browser, &profile, now)?;
+        write_live_state(&tx, &browser, &profile, &fp, &filtered, now)?;
+        tx.commit()?;
+        return Ok(IngestReport {
+            outcome: IngestOutcome::Unchanged { snapshot_id: id },
+            closed_tabs,
+            closed_windows,
+        });
     }
 
     let tx = db.conn().unchecked_transaction()?;
@@ -596,94 +749,38 @@ pub fn ingest_full_state(
     )?;
     insert_window_and_tab_rows(&tx, snapshot_id, &browser, &profile, &filtered)?;
 
-    let mut closed_windows = 0usize;
-    if detect_closes {
-        let before = prev.unwrap_or_default();
-        // Closed windows first, then the tabs that went with them.
-        for before_window in &before.windows {
-            if diff
-                .windows_removed
-                .iter()
-                .any(|id| id == &before_window.window_id)
-            {
-                let tab_count = before_window.tabs.len() as i64;
-                let pinned = before_window.tabs.iter().filter(|t| t.pinned).count() as i64;
-                let event_id = insert_window_event(
-                    &tx,
-                    &browser,
-                    &profile,
-                    &before_window.window_id,
-                    now,
-                    tab_count,
-                    pinned,
-                    Some(snapshot_id),
-                    "extension",
-                    None,
-                )?;
-                closed_windows += 1;
-                for t in &before_window.tabs {
-                    let rec = tab_to_closed_record(t, &browser, &profile, now, true);
-                    insert_closed_tab_event(&tx, &rec, Some(event_id), None)?;
-                    closed_tabs.push(rec);
-                }
-            }
-        }
-        // Single-tab closes not attached to a window close.
-        for rec in filtered_closes_only(&closed_tabs) {
-            insert_closed_tab_event(&tx, rec, None, None)?;
-        }
-        if closed_windows >= 1 {
-            recovery_point = true;
-        }
-    }
-
-    // Pinned vault from the filtered (surviving) state.
-    for (_w, t) in filtered.all_tabs() {
-        touch_pinned_site_full(
-            &tx,
-            &browser,
-            &profile,
-            &t.url,
-            &t.title,
-            t.favicon.as_deref(),
-            t.pinned,
-            t.group_name.as_deref(),
-            t.group_color.as_deref(),
-            now,
-        )?;
-    }
-
-    // Live state overwrite for the next diff.
-    let payload = serde_json::to_string(&filtered)?;
-    tx.execute(
-        "INSERT INTO live_state (browser, profile, fingerprint, payload, updated_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(browser, profile) DO UPDATE SET
-            fingerprint = excluded.fingerprint,
-            payload = excluded.payload,
-            updated_ms = excluded.updated_ms",
-        rusqlite::params![browser, profile, fp, payload, now],
+    let (closed_tabs, closed_windows) = detect_and_insert_closes(
+        &tx,
+        prev.as_ref(),
+        &diff,
+        detect_closes,
+        Some(snapshot_id),
+        now,
+        &browser,
+        &profile,
     )?;
-
+    if closed_windows >= 1 {
+        recovery_point = true;
+    }
+    // Pinned vault from the filtered (surviving) state.
+    touch_pinned_vault(&tx, &filtered, &browser, &profile, now)?;
+    // Live state overwrite for the next diff.
+    write_live_state(&tx, &browser, &profile, &fp, &filtered, now)?;
     // Mass-close promotion from the recent-close window.
-    if detect_closes {
-        let window_ms = settings.mass_close_window_secs as i64 * 1000;
-        let cutoff = now - window_ms;
-        let recent: i64 = tx.query_row(
-            "SELECT count(*) FROM closed_tab_events
-             WHERE browser = ?1 AND profile = ?2 AND closed_ms >= ?3",
-            rusqlite::params![browser, profile, cutoff],
-            |r| r.get(0),
-        )?;
-        if snapshot::is_mass_close(recent as usize, settings.mass_close_tab_threshold) {
-            recovery_point = true;
-        }
-        if recovery_point {
-            tx.execute(
-                "UPDATE snapshots SET recovery_point = 1, reason = ?1 WHERE id = ?2",
-                rusqlite::params![SnapshotReason::MassClose.as_str(), snapshot_id],
-            )?;
-        }
+    let promoted = promote_mass_close_point(
+        &tx,
+        &browser,
+        &profile,
+        now,
+        &settings,
+        detect_closes,
+        Some(snapshot_id),
+    )?;
+    if promoted {
+        recovery_point = true;
+    }
+    if recovery_point {
+        flag_recovery_point(&tx, snapshot_id)?;
     }
 
     tx.commit()?;
@@ -698,12 +795,6 @@ pub fn ingest_full_state(
         closed_tabs,
         closed_windows,
     })
-}
-
-/// The `part_of_closed_window` duplication would otherwise double-count these
-/// rows; this selects only the standalone ones.
-fn filtered_closes_only(closed_tabs: &[ClosedTabRecord]) -> impl Iterator<Item = &ClosedTabRecord> {
-    closed_tabs.iter().filter(|t| !t.part_of_closed_window)
 }
 
 fn insert_snapshot_row(

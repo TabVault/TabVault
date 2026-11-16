@@ -888,6 +888,170 @@ pub fn finish_import_batch(db: &Db, batch_id: i64, error: Option<&str>) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// First-run import from the extension (sessions + history seed)
+// ---------------------------------------------------------------------------
+
+/// An entry reported by the browser's sessions API (recently closed tab).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImportSessionEntry {
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub pinned: bool,
+    #[serde(default)]
+    pub favicon: Option<String>,
+    /// Seconds since the Unix epoch as reported by the browser; we normalise
+    /// to milliseconds here.
+    #[serde(default)]
+    pub last_active_ms: Option<i64>,
+}
+
+/// One aggregated visit entry reported by the extension's history seeding.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ImportHistoryEntry {
+    pub url: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub visit_count: i64,
+    /// Milliseconds since the Unix epoch (the extension's history API gives ms).
+    #[serde(default)]
+    pub last_visit_time: Option<i64>,
+}
+
+/// Imports the browser's own recently-closed entries as closed-tab events.
+///
+/// The browser's session API knows pinned state authoritatively, so confidence
+/// is High; `source` is recorded as `import` because these rows did not come
+/// from live capture or from a session-file replay.
+pub fn import_session_entries(
+    db: &Db,
+    browser_name: &str,
+    profile: &str,
+    entries: &[ImportSessionEntry],
+) -> Result<ImportStats> {
+    let mut stats = ImportStats::default();
+    let now = now_ms();
+    let tx = db.conn().unchecked_transaction()?;
+    for entry in entries {
+        stats.items_found += 1;
+        let key = url_key(&entry.url);
+        if key.is_empty() {
+            continue;
+        }
+        let closed = entry.last_active_ms.unwrap_or(now);
+        let tab = TabRecord {
+            url: entry.url.clone(),
+            title: entry.title.clone(),
+            favicon: entry.favicon.clone(),
+            pinned: entry.pinned,
+            tab_index: 0,
+            window_id: String::new(),
+            group_name: None,
+            group_color: None,
+            browser: browser_name.to_string(),
+            profile: profile.to_string(),
+            opened_ms: None,
+            closed_ms: Some(closed),
+            last_active_ms: Some(closed),
+            active_ms: 0,
+            visit_count: 1,
+            part_of_closed_window: false,
+            incognito: false,
+            source: crate::model::Source::Import,
+            confidence: crate::model::Confidence::High,
+        };
+        let rec = ClosedTabRecord {
+            browser: browser_name.to_string(),
+            profile: profile.to_string(),
+            url: tab.url.clone(),
+            title: tab.title.clone(),
+            favicon: tab.favicon.clone(),
+            pinned: tab.pinned,
+            tab_index: 0,
+            window_id: String::new(),
+            group_name: None,
+            group_color: None,
+            opened_ms: None,
+            closed_ms: closed,
+            last_active_ms: Some(closed),
+            active_ms: 0,
+            visit_count: 1,
+            part_of_closed_window: false,
+            source: tab.source,
+            confidence: tab.confidence,
+        };
+        insert_closed_tab_event(&tx, &rec, None)?;
+        touch_pinned_site(
+            &tx,
+            browser_name,
+            profile,
+            &tab.url,
+            &tab.title,
+            tab.favicon.as_deref(),
+            tab.pinned,
+            None,
+            closed,
+        )?;
+        stats.items_imported += 1;
+    }
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// Seeds `visit_stats` and the search index with aggregated counts from the
+/// browser's history. Never creates closed-tab events (these were visits, not
+/// closures) and never downgrades an existing, richer count — it keeps the max.
+pub fn import_history_entries(
+    db: &Db,
+    browser_name: &str,
+    profile: &str,
+    entries: &[ImportHistoryEntry],
+) -> Result<ImportStats> {
+    let mut stats = ImportStats::default();
+    let tx = db.conn().unchecked_transaction()?;
+    for entry in entries {
+        stats.items_found += 1;
+        if entry.visit_count <= 0 {
+            continue;
+        }
+        seed_visit_stats(
+            &tx,
+            browser_name,
+            profile,
+            &entry.url,
+            &entry.title,
+            entry.visit_count,
+            entry.last_visit_time,
+            entry.last_visit_time,
+        )?;
+        search_docs_upsert(
+            &tx,
+            browser_name,
+            profile,
+            &entry.url,
+            &entry.title,
+            "visited",
+            false,
+            entry.visit_count,
+            0,
+            entry.last_visit_time.unwrap_or_else(now_ms),
+        )?;
+        stats.items_imported += 1;
+    }
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// Flips the recording pause in vault settings.
+pub fn set_recording_paused(db: &Db, paused: bool) -> Result<()> {
+    let mut settings = db.settings();
+    settings.recording_paused = paused;
+    db.set_settings(&settings)
+}
+
+// ---------------------------------------------------------------------------
 // Retention
 // ---------------------------------------------------------------------------
 

@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TabVault Options</title>
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #15171c;
+        color: #e8eaf0;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        font-size: 14px;
+        padding: 28px;
+      }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: #8b90a0; margin: 26px 0 8px; }
+      .card { background: #1d2027; border: 1px solid #2c2f3a; border-radius: 10px; padding: 16px 18px; max-width: 720px; }
+      .row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #2c2f3a; gap: 16px; }
+      .row:last-child { border-bottom: none; }
+      .muted { color: #8b90a0; font-size: 12px; }
+      button {
+        background: #e05c8a; border: none; color: #fff; border-radius: 6px;
+        padding: 8px 12px; font-size: 13px; cursor: pointer;
+      }
+      button.secondary { background: #2c2f3a; }
+      button:hover { filter: brightness(1.1); }
+      code { background: #23262f; padding: 1px 6px; border-radius: 4px; }
+      #log { white-space: pre-wrap; background: #101216; padding: 10px; border-radius: 8px; min-height: 60px; font-family: Consolas, monospace; font-size: 12px; color: #9fe0b2; }
+    </style>
+  </head>
+  <body>
+    <h1>TabVault</h1>
+    <div class="muted">Everything the extension knows, and what it will do next.</div>
+
+    <h2>Native host connection</h2>
+    <div class="card">
+      <div class="row"><span>Status</span><span id="hostStatus">…</span></div>
+      <div class="row"><span>Last error</span><span id="hostError" class="muted">none</span></div>
+      <div class="row"><span>Queue depth</span><span id="queueDepth">0</span></div>
+      <div class="row"><span>App version</span><span id="appVersion">—</span></div>
+      <div class="row">
+        <span>Connection test (ping/pong)</span>
+        <button id="ping" class="secondary">Test</button>
+      </div>
+      <div class="row">
+        <span>Flush queued messages now</span>
+        <button id="flush" class="secondary">Flush</button>
+      </div>
+    </div>
+
+    <h2>Recording</h2>
+    <div class="card">
+      <div class="row">
+        <span>Pause recording<br /><span class="muted">Stops all capture until you resume. Data already stored stays.</span></span>
+        <button id="pause" class="secondary">Pause</button>
+      </div>
+      <div class="row"><span>Capture interval</span><span id="interval" class="muted">synced from TabVault</span></div>
+      <div class="row"><span>Incognito capture</span><span id="incognito" class="muted">synced from TabVault</span></div>
+      <div class="row"><span>Mass-close notifications</span><span id="notify" class="muted">synced from TabVault</span></div>
+      <div class="row">
+        <span class="muted">Change these in the TabVault desktop app, which owns the settings.</span>
+        <button id="openApp">Open TabVault</button>
+      </div>
+    </div>
+
+    <h2>First-run import (this browser only)</h2>
+    <div class="card">
+      <div class="row">
+        <span>Import recently closed tabs<br /><span class="muted">Uses this browser's own sessions list (up to 25 entries). Better recovery lives in the desktop app.</span></span>
+        <button id="importSessions" class="secondary">Import</button>
+      </div>
+      <div class="row">
+        <span>Seed visit statistics from history<br /><span class="muted">Counts visits per URL over the last 90 days. Does not record open tabs.</span></span>
+        <button id="importHistory" class="secondary">Seed</button>
+      </div>
+    </div>
+
+    <h2>Activity log</h2>
+    <div class="card"><div id="log">ready.</div></div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

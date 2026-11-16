@@ -15,7 +15,7 @@
 //!   tabvault-host --selftest    # open the vault, run migrations, exit 0/1
 //!   tabvault-host --version     # print version
 
-use protocol::{ExtensionMessage, HostMessage, RestoreJob};
+use protocol::{ExtensionMessage, HostMessage, LiveAppSettings, RestoreJob};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use tv_core::db::{open_vault, write};
@@ -282,7 +282,12 @@ fn handle_message(
                         .unwrap_or_else(|_| serde_json::json!({ "raw": payload })),
                 })
                 .collect();
-            Ok(Some(HostMessage::Restore { jobs }))
+            // Push the authoritative live settings with every poll reply.
+            let settings = live_settings(db);
+            Ok(Some(HostMessage::Restore {
+                jobs,
+                settings: Some(settings),
+            }))
         }
 
         ExtensionMessage::RestoreDone { job_id, error } => {
@@ -290,9 +295,65 @@ fn handle_message(
             Ok(None)
         }
 
+        ExtensionMessage::SetPaused { paused } => {
+            write::set_recording_paused(db, paused)?;
+            Ok(Some(HostMessage::AckSettings {
+                settings: live_settings(db),
+            }))
+        }
+
+        ExtensionMessage::ImportSessions { entries } => {
+            let report = write::import_session_entries(db, "browser", "default", &entries)?;
+            tracing::info!(found = report.items_found, imported = report.items_imported, "imported session entries");
+            Ok(Some(HostMessage::AckSettings {
+                settings: live_settings(db),
+            }))
+        }
+
+        ExtensionMessage::ImportHistory { entries } => {
+            let report = write::import_history_entries(db, "browser", "default", &entries)?;
+            tracing::info!(found = report.items_found, imported = report.items_imported, "seeded history stats");
+            Ok(Some(HostMessage::AckSettings {
+                settings: live_settings(db),
+            }))
+        }
+
+        ExtensionMessage::OpenApp => {
+            open_desktop_app();
+            Ok(None)
+        }
+
         ExtensionMessage::Ping => Ok(Some(HostMessage::Pong {
             app_version: APP_VERSION.to_string(),
         })),
+    }
+}
+
+fn live_settings(db: &tv_core::db::Db) -> LiveAppSettings {
+    let s = db.settings();
+    LiveAppSettings {
+        paused: s.recording_paused,
+        capture_interval_secs: s.capture_interval_secs,
+        capture_incognito: s.capture_incognito,
+        notify_on_mass_close: s.notify_on_mass_close,
+        mass_close_tab_threshold: s.mass_close_tab_threshold,
+        mass_close_window_secs: s.mass_close_window_secs,
+    }
+}
+
+/// Launches the desktop app, found next to this binary (the installer places
+/// them in the same directory).
+fn open_desktop_app() {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("tabvault.exe")));
+    match exe {
+        Some(path) if path.is_file() => {
+            let _ = std::process::Command::new(&path).spawn();
+        }
+        _ => {
+            eprintln!("[tabvault] open_app requested but tabvault.exe was not found next to the host");
+        }
     }
 }
 

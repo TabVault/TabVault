@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TabVault</title>
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        margin: 0;
+        width: 300px;
+        background: #1d2027;
+        color: #e8eaf0;
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        font-size: 13px;
+        padding: 14px 16px;
+      }
+      h1 { font-size: 15px; margin: 0 0 10px; letter-spacing: 0.02em; }
+      .row { display: flex; align-items: center; justify-content: space-between; margin: 8px 0; }
+      .muted { color: #8b90a0; font-size: 12px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+      .dot.up { background: #4cc38a; }
+      .dot.down { background: #e05c8a; }
+      button {
+        background: #e05c8a; border: none; color: #fff; border-radius: 6px;
+        padding: 7px 10px; font-size: 12px; cursor: pointer; width: 100%;
+        margin-top: 6px;
+      }
+      button.secondary { background: #2c2f3a; }
+      button:hover { filter: brightness(1.1); }
+      code { background: #23262f; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+    </style>
+  </head>
+  <body>
+    <h1>TabVault <span id="version" class="muted"></span></h1>
+    <div class="row">
+      <span><span id="dot" class="dot"></span><span id="statusText">connecting…</span></span>
+      <span id="queueDepth" class="muted"></span>
+    </div>
+    <div class="row">
+      <span class="muted">last capture</span>
+      <span id="lastSeen" class="muted">never</span>
+    </div>
+    <div class="row">
+      <span class="muted">recording</span>
+      <span id="recState" class="muted">…</span>
+    </div>
+    <button id="snapshotNow">Snapshot now</button>
+    <button id="togglePause" class="secondary">Pause recording</button>
+    <button id="openApp" class="secondary">Open TabVault</button>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

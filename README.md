@@ -290,6 +290,8 @@ Plus a manual test plan for the browser bits: [`docs/MANUAL-TEST-PLAN.md`](docs/
 
 | Symptom | Fix |
 |---|---|
+| Antivirus flags the installer | See [docs/FALSE-POSITIVE.md](docs/FALSE-POSITIVE.md) — the build is scanned clean by Windows Defender; report the false positive with the published hash; EV/OV code signing is the durable fix. |
+| Windows SmartScreen blocks the installer | The binary is unsigned (no certificate). Click "More info" → "Run anyway", or report it as above. |
 | Popup says "host offline" | Run `.\installer\scripts\register-native-host.ps1` (as your user, no admin). Then reload the extension's page. Details: `docs/PERMISSIONS.md`. |
 | "host offline" after moving the app | Re-run the registration script with `-AppDir <new dir>` — the manifest stores an absolute path. |
 | Extension runs stale code while iterating | Chrome's service worker cache lives in the *profile*. When developing with `--load-extension`, delete the profile (`C:\Users\<you>\AppData\Local\Google\Chrome\User Data\Default` is your real profile — **do not** wipe it; instead use a scratch `--user-data-dir` and delete that) or load from a fresh directory. |

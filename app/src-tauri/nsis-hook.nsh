@@ -1,29 +1,33 @@
 ; TabVault NSIS hooks.
 ;
-; Runs inside Tauri's generated NSIS installer for TabVault. The installer
-; copies the app, `tabvault-host.exe` and `register-native-host.ps1` into
-; $INSTDIR (current user's Programs folder) and then runs these hooks.
+; Runs inside Tauri's generated NSIS installer for TabVault.
 ;
-; POSTINSTALL registers the native messaging host with Chrome, Edge and
-; Firefox (registry + manifest). If that fails we warn but do not fail the
-; install — the app itself is fully functional and the user can re-run the
-; registration manually at any time.
+; POSTINSTALL — registers the native messaging host for Chrome, Edge and Firefox.
+;   Everything here is native NSIS: no scripts are spawned, nothing is downloaded.
+;   The host manifest is written next to tabvault-host.exe with the install path
+;   interpolated. Registration is per-user (HKCU), exactly what a browser
+;   extension needs to talk to the host; no elevated access is used.
 ;
-; PREUNINSTALL removes the registry keys so a reinstall starts clean.
+; PREUNINSTALL — removes those HKCU registry keys so a reinstall starts clean.
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; Register the native host. The script is idempotent and works unattended.
-  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\register-native-host.ps1" -AppDir "$INSTDIR"' $R0
-  IntCmp $R0 0 registration_ok registration_failed registration_failed
+  ; The manifest lists absolute allowed origins, the browser extension ids and
+  ; the host binary path. Forward slashes need no JSON escaping and are handled
+  ; by Windows APIs transparently.
+  FileOpen $9 "$INSTDIR\com.tabvault.host.json" w
+  FileWrite $9 '{"name":"com.tabvault.host","description":"TabVault native messaging host: browser extension to local SQLite vault","path":"$INSTDIR/tabvault-host.exe","type":"stdio","allowed_origins":["chrome-extension://fbeikljjdhlgipmpgeohjigbgdmnkeae/"],"allowed_extensions":["tabvault@tabvault"]}'
+  FileClose $9
 
-  registration_failed:
-    MessageBox MB_ICONEXCLAMATION "TabVault was installed, but automatic native-host registration reported an error (code $R0). The app itself works fine; to enable browser capture, run once as your user: powershell -ExecutionPolicy Bypass -File register-native-host.ps1 -AppDir $INSTDIR"
-
-  registration_ok:
+  ; Chrome and Edge validate the extension's origin against allowed_origins;
+  ; Firefox validates the add-on id against allowed_extensions.
+  WriteRegStr HKCU "Software\Google\Chrome\NativeMessagingHosts\com.tabvault.host" "" "$INSTDIR\com.tabvault.host.json"
+  WriteRegStr HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.tabvault.host" "" "$INSTDIR\com.tabvault.host.json"
+  WriteRegStr HKCU "Software\Mozilla\NativeMessagingHosts\com.tabvault.host" "" "$INSTDIR\com.tabvault.host.json"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
-  ; Remove the browser registry entries. The manifest stays behind; a reinstall
-  ; rewrites it. Nothing user-generated is touched.
-  ExecWait '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -NonInteractive -File "$INSTDIR\register-native-host.ps1" -AppDir "$INSTDIR" -Uninstall' $R0
+  ; Remove only the keys this installer wrote. Nothing user-generated is touched.
+  DeleteRegKey HKCU "Software\Google\Chrome\NativeMessagingHosts\com.tabvault.host"
+  DeleteRegKey HKCU "Software\Microsoft\Edge\NativeMessagingHosts\com.tabvault.host"
+  DeleteRegKey HKCU "Software\Mozilla\NativeMessagingHosts\com.tabvault.host"
 !macroend

@@ -478,24 +478,67 @@ fn settings_get(state: tauri::State<'_, AppState>) -> Result<Settings, String> {
     Ok(db.settings())
 }
 
+/// Registers (or unregisters) TabVault to start with Windows via the HKCU
+/// Run key, using the Win32 registry API directly — no child process.
+#[cfg(windows)]
 fn set_autostart_impl(enable: bool) {
-    #[cfg(windows)]
-    {
-        use std::process::Command;
-        let exe = match std::env::current_exe() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-        let value = format!("\"{}\"", exe.display());
-        let args: Vec<&str> = if enable {
-            vec!["add", key, "/v", "TabVault", "/t", "REG_SZ", "/d", &value, "/f"]
+    use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+    use windows_sys::Win32::System::Registry::*;
+
+    let subkey: Vec<u16> = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    let value_name: Vec<u16> = "TabVault".encode_utf16().chain(Some(0)).collect();
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let value: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().chain(Some(0)).collect();
+
+    unsafe {
+        let mut key: HKEY = std::ptr::null_mut();
+        let status = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            std::ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut key,
+            std::ptr::null_mut(),
+        );
+        if status != ERROR_SUCCESS {
+            eprintln!("[tabvault] autostart: RegCreateKeyExW failed ({status})");
+            return;
+        }
+        if enable {
+            // WCHAR count, not byte count, is what REG_SZ expects to be doubled.
+            let bytes = (value.len() * 2) as u32;
+            let status = RegSetValueExW(
+                key,
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                value.as_ptr() as *const u8,
+                bytes,
+            );
+            if status != ERROR_SUCCESS {
+                eprintln!("[tabvault] autostart: RegSetValueExW failed ({status})");
+            }
         } else {
-            vec!["delete", key, "/v", "TabVault", "/f"]
-        };
-        let _ = Command::new("reg.exe").args(args).output();
+            let status = RegDeleteValueW(key, value_name.as_ptr());
+            if status != ERROR_SUCCESS && status != 2 {
+                eprintln!("[tabvault] autostart: RegDeleteValueW failed ({status})");
+            }
+        }
+        RegCloseKey(key);
     }
 }
+
+#[cfg(not(windows))]
+fn set_autostart_impl(_enable: bool) {}
 
 #[tauri::command]
 fn settings_set(state: tauri::State<'_, AppState>, settings: Settings) -> Result<(), String> {
@@ -574,17 +617,47 @@ fn backup_now(state: tauri::State<'_, AppState>) -> Result<String, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Opens a URL in the user's default browser via ShellExecuteW (no child
+/// process spawned, unlike `cmd /c start`).
+#[cfg(windows)]
+fn shell_open(target: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+    let wide: Vec<u16> = target.encode_utf16().chain(Some(0)).collect();
+    let verb: Vec<u16> = "open".encode_utf16().chain(Some(0)).collect();
+    let action = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            wide.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if (action as usize) <= 32 {
+        return Err(format!("ShellExecuteW failed (code {})", action as usize));
+    }
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn shell_open(_target: &str) -> Result<(), String> {
+    Err("opening URLs is only supported on Windows".to_string())
+}
+
 #[tauri::command]
 fn open_url(url: String) -> Result<(), String> {
     // Opens the URL in the user's default browser.
-    #[cfg(windows)]
-    {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", &url])
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    shell_open(&url)
+}
+
+#[tauri::command]
+fn open_data_folder() -> Result<(), String> {
+    let dir = vault_path()?.parent().map(|p| p.to_path_buf()).ok_or_else(|| "vault path has no parent".to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    shell_open(&dir.display().to_string())
 }
 
 fn exports_dir() -> Result<PathBuf, String> {
@@ -724,14 +797,7 @@ fn html_escape(s: &str) -> String {
 #[tauri::command]
 fn export_open_folder() -> Result<(), String> {
     let dir = exports_dir()?;
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer.exe")
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    shell_open(&dir.display().to_string())
 }
 
 #[tauri::command]
@@ -841,20 +907,6 @@ fn set_encryption(state: tauri::State<'_, AppState>, enable: bool) -> Result<boo
             }
         }
     }
-}
-
-#[tauri::command]
-fn open_data_folder() -> Result<(), String> {
-    let dir = vault_path()?.parent().map(|p| p.to_path_buf()).ok_or_else(|| "vault path has no parent".to_string())?;
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    #[cfg(windows)]
-    {
-        std::process::Command::new("explorer.exe")
-            .arg(&dir)
-            .spawn()
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
 }
 
 mod commands_import;

@@ -31,11 +31,15 @@
     "createUpdaterArtifacts": false,
     "targets": ["nsis"],
     "icon": ["icons/icon.png"],
+    "publisher": "TabVault Contributors",
+    "homepage": "https://github.com/tabvault/tabvault",
+    "copyright": "Copyright (c) 2026 TabVault Contributors. MIT License.",
+    "licenseFile": "../../LICENSE",
     "resources": {
-      "../../target/release/tabvault-host.exe": "tabvault-host.exe",
-      "../../installer/scripts/register-native-host.ps1": "register-native-host.ps1"
+      "../../target/release/tabvault-host.exe": "tabvault-host.exe"
     },
     "windows": {
+      "webviewInstallMode": { "type": "skip" },
       "nsis": {
         "installMode": "currentUser",
         "displayLanguageSelector": false,

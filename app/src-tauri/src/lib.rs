@@ -98,6 +98,7 @@ fn tab_from_closed_row(row: &query::ClosedTabRow) -> TabRecord {
         incognito: false,
         source: tv_core::model::Source::Extension,
         confidence: tv_core::model::Confidence::High,
+        browser_tab_id: None,
     }
 }
 

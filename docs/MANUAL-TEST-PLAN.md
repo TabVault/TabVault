@@ -45,9 +45,20 @@ time: 30â€“45 minutes.
 | 3.1 | Recently Closed â†’ check **skip already-open** â†’ restore a tab you already have open elsewhere. | Nothing opens (correctly skipped). |
 | 3.2 | Same, with the checkbox off. | The tab opens again (duplicate, deliberately). |
 | 3.3 | Restore a full window from Recently Closed via **Restore window**. | All its tabs reopen, pinned ones pinned, in one new window. |
-| 3.4 | Re-pin all: Pinned Vault â†’ **Re-pin all**. | Every previously pinned site opens pinned in one new window; already-open ones are skipped (checkbox). |
+| 3.4 | Re-pin: Pinned Vault -> **Re-pin currently pinned**. | Your live pinned sites re-open pinned in one new window; already-open ones are skipped (checkbox). |
 
-## 4. Timeline fidelity
+## 4. Pinned-restore UX
+
+| # | Step | Expected result |
+|---|------|-----------------|
+| 5.1 | Recently Closed -> press **Restore all pinned (N)** (N = pinned rows in view). | The pinned tabs open pinned in one new window. |
+| 5.2 | After any restore, read the toast. | Shows the actual outcome (restored N tabs / failed reason / dispatched), not just Restoring. |
+| 5.3 | Pinned Vault -> keep **new window** on -> **Re-pin currently pinned (N)**. | Your live pinned sites re-open pinned together. |
+| 5.4 | Pinned Vault -> **Re-pin everything ever pinned (M)**. | Everything the vault ever recorded as pinned re-opens pinned, with original group names/colors. |
+| 5.5 | Pinned Vault -> per-row **Restore**. | That one site opens pinned (as the active tab) in the new window. |
+| 5.6 | Tray -> **Re-pin current pinned tabs**. | Same as 5.3 without opening the app. |
+
+## 5. Timeline fidelity
 
 | # | Step | Expected result |
 |---|------|-----------------|
@@ -55,14 +66,14 @@ time: 30â€“45 minutes.
 | 4.2 | **Restore this snapshot**. | The whole layout reopens in a new window. |
 | 4.3 | With exclusions configured (Settings â†’ Recording â†’ Exclusions: `example.com`), open example.com tabs, snapshot, and check the snapshot. | example.com tabs are **absent** from the snapshot and from Recently Closed; the rest are recorded. |
 
-## 5. Pause + retention
+## 6. Pause + retention
 
 | # | Step | Expected result |
 |---|------|-----------------|
 | 5.1 | Tray or Settings â†’ **Pause recording**. Open/close tabs. | No new snapshots, no Recently Closed rows. Unpause â†’ capture resumes. |
 | 5.2 | Settings â†’ retention hourly = 7 days, daily = 90, press **Prune now**. | A dry-run summary shows kept recent/hourly/daily and deleted counts; closed-tab history is untouched (it is permanent). |
 
-## 6. Recover from the past (the anti-disaster feature)
+## 7. Recover from the past (the anti-disaster feature)
 
 | # | Step | Expected result |
 |---|------|-----------------|
@@ -74,7 +85,7 @@ time: 30â€“45 minutes.
 | 6.6 | Import the same file twice. | Second import creates no duplicates (dedupe by URL key + close time window). |
 | 6.7 | Import the `Sessions_Encrypted` (v20) file. | Clear explanation: *App-Bound Encryption â€” unreadable outside the browser; import the cleartext `Sessions/` mirror instead.* Nothing is fabricated. |
 
-## 7. Encryption at rest (optional)
+## 8. Encryption at rest (optional)
 
 | # | Step | Expected result |
 |---|------|-----------------|
@@ -83,7 +94,7 @@ time: 30â€“45 minutes.
 | 7.3 | Try to open `%APPDATA%\TabVault\tabvault.db` in any SQLite tool. | "file is not a database" â€” no schema, no rows. |
 | 7.4 | Toggle **off**. | Vault returns to plaintext; all data intact (verified by counts before/after). |
 
-## 8. Tray + shortcuts
+## 9. Tray + shortcuts
 
 | # | Step | Expected result |
 |---|------|-----------------|
@@ -92,7 +103,7 @@ time: 30â€“45 minutes.
 | 8.3 | `Ctrl+K` â†’ type a distinctive word from an old tab. | Result list shows it; Enter opens it in the browser. |
 | 8.4 | `Alt+1`â€¦`Alt+6`. | Jumps to each screen. |
 
-## 9. Restore-feedback & keyboard
+## 10. Restore-feedback & keyboard
 
 | # | Step | Expected result |
 |---|------|-----------------|
@@ -101,7 +112,7 @@ time: 30â€“45 minutes.
 | 9.3 | Trigger a restore with the browser closed. | The toast reports the dispatch outcome (sent / failed / "tabs will open on next launch"), not just "restoringâ€¦". |
 | 9.4 | Import a `Tabs_*` file, then **Recently Closed â†’ Group by source file**. | A banner per imported file (name, import time, counts) with that file's tabs under it; live captures sit under a "Live capture" banner. |
 
-## 10. Failure drills
+## 11. Failure drills
 
 | # | Step | Expected result |
 |---|------|-----------------|

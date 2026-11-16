@@ -166,6 +166,11 @@ export default function Recover({ notify }: { notify: (msg: string) => void }) {
                   <div className="row-text" style={{ flex: 1 }}>
                     <span style={{ fontFamily: 'Consolas, monospace' }}>{outcome.file}</span>
                     <span className="muted"> — {outcome.itemsImported} imported of {outcome.itemsFound} found</span>
+                    {outcome.pinnedImported > 0 && (
+                      <span className="badge pin" title="These pinned tabs were imported with their pin state and are restorable as pinned">
+                        📌 {outcome.pinnedImported} pinned
+                      </span>
+                    )}
                   </div>
                   <span className="badge source">done</span>
                 </div>

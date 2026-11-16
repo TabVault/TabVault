@@ -377,36 +377,83 @@ fn pinned_vault(
     query::list_pinned_sites(db.conn(), browser.as_deref()).map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn repin_all(
-    state: tauri::State<'_, AppState>,
-    mode: RestoreMode,
-) -> Result<i64, String> {
-    let guard = db(&state)?;
-    let db = vault(&guard)?;
+/// Shared implementation for re-pinning pinned sites (tray + command).
+///
+/// `scope`: `"current"` restores only sites pinned in your last capture —
+/// the "bring back my pins" moment. `"all"` restores everything the vault
+/// has ever seen pinned, ignoring whether it is currently open. Sites whose
+/// group is known recreate that group with the original name and color.
+pub(crate) fn repin_impl(db: &Db, mode: RestoreMode, scope: &str) -> Result<i64, String> {
     let sites = query::list_pinned_sites(db.conn(), None).map_err(|e| e.to_string())?;
-    if sites.is_empty() {
+    let chosen: Vec<&query::PinnedSiteRow> = match scope {
+        "all" => sites.iter().collect(),
+        // Default: what is actually pinned right now.
+        _ => {
+            let current: Vec<&query::PinnedSiteRow> =
+                sites.iter().filter(|s| s.currently_pinned).collect();
+            if current.is_empty() {
+                return Err(
+                    "no sites are currently pinned in your browsers — \
+                     use 'Re-pin everything ever pinned' to restore from history"
+                        .to_string(),
+                );
+            }
+            current
+        }
+    };
+    if chosen.is_empty() {
         return Err("nothing pinned yet — pin something in your browser first".to_string());
     }
-    // Prefer currently-pinned sites; fall back to the full vault when there is none.
-    let current: Vec<&query::PinnedSiteRow> = sites.iter().filter(|s| s.currently_pinned).collect();
-    let chosen: Vec<&query::PinnedSiteRow> = if current.is_empty() {
-        sites.iter().collect()
-    } else {
-        current
-    };
     let payload = serde_json::json!({
-        "tabs": chosen.iter().map(|s| serde_json::json!({
+        "tabs": chosen.iter().enumerate().map(|(i, s)| serde_json::json!({
             "url": s.url,
             "pinned": true,
-            "active": false,
+            "active": i == 0,
             "groupName": s.group_name,
             "groupColor": s.group_color,
         })).collect::<Vec<_>>(),
         "newWindow": mode.new_window,
         "skipOpen": mode.skip_open,
     });
-    enqueue_restore(&db, "repin_all", payload)
+    enqueue_restore(db, "repin_all", payload)
+}
+
+#[tauri::command]
+fn repin_all(
+    state: tauri::State<'_, AppState>,
+    mode: RestoreMode,
+    scope: Option<String>,
+) -> Result<i64, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    repin_impl(&db, mode, scope.as_deref().unwrap_or("current"))
+}
+
+#[tauri::command]
+fn restore_pinned_site(
+    state: tauri::State<'_, AppState>,
+    id: i64,
+    mode: RestoreMode,
+) -> Result<i64, String> {
+    let guard = db(&state)?;
+    let db = vault(&guard)?;
+    let sites = query::list_pinned_sites(db.conn(), None).map_err(|e| e.to_string())?;
+    let site = sites
+        .iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| "that pinned site is not in the vault".to_string())?;
+    let payload = serde_json::json!({
+        "tabs": [serde_json::json!({
+            "url": site.url,
+            "pinned": true,
+            "active": true,
+            "groupName": site.group_name,
+            "groupColor": site.group_color,
+        })],
+        "newWindow": mode.new_window,
+        "skipOpen": mode.skip_open,
+    });
+    enqueue_restore(&db, "open_window", payload)
 }
 
 #[tauri::command]
@@ -941,11 +988,12 @@ pub fn run() {
             let open_item = tauri::menu::MenuItemBuilder::with_id("open", "Open TabVault").build(app)?;
             let recent_item = tauri::menu::MenuItemBuilder::with_id("recent", "Recently Closed").build(app)?;
             let restore_item = tauri::menu::MenuItemBuilder::with_id("restore_last", "Restore Last Closed Window (Ctrl+Alt+R)").build(app)?;
+            let repin_item = tauri::menu::MenuItemBuilder::with_id("restore_pins", "Re-pin current pinned tabs").build(app)?;
             let sep = tauri::menu::PredefinedMenuItem::separator(app)?;
             let pause_item = tauri::menu::MenuItemBuilder::with_id("pause", "Pause Recording").build(app)?;
             let quit_item = tauri::menu::MenuItemBuilder::with_id("quit", "Quit TabVault").build(app)?;
             let menu = tauri::menu::MenuBuilder::new(app)
-                .items(&[&open_item, &recent_item, &restore_item, &sep, &pause_item, &quit_item])
+                .items(&[&open_item, &recent_item, &restore_item, &repin_item, &sep, &pause_item, &quit_item])
                 .build()?;
 
             let tray = tauri::tray::TrayIconBuilder::with_id("main")
@@ -959,6 +1007,19 @@ pub fn run() {
                                 let path = vault_path().ok()?;
                                 let db = open_vault(&path).ok()?;
                                 restore_last_closed_window_impl(&db).ok()?;
+                                Some(())
+                            })();
+                        }
+                        "restore_pins" => {
+                            let _ = (|| {
+                                let path = vault_path().ok()?;
+                                let db = open_vault(&path).ok()?;
+                                repin_impl(
+                                    &db,
+                                    RestoreMode::default(),
+                                    "current",
+                                )
+                                .ok()?;
                                 Some(())
                             })();
                         }
@@ -1019,6 +1080,7 @@ pub fn run() {
             restore_window,
             restore_snapshot,
             restore_last_closed_window,
+            restore_pinned_site,
             recent_restore_requests,
             timeline,
             snapshot_detail,

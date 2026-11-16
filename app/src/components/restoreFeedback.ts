@@ -8,6 +8,7 @@ import { api } from '../api';
 export async function notifyRestoreResult(
   notify: (msg: string) => void,
   jobPromise: Promise<number>,
+  expectedTabs?: number,
 ): Promise<void> {
   let jobId: number;
   try {
@@ -26,7 +27,11 @@ export async function notifyRestoreResult(
       if (!job) return;
       const [, , status, error] = job;
       if (status === 'done') {
-        notify('Restored.');
+        notify(
+          expectedTabs !== undefined && expectedTabs !== 1
+            ? `Restored ${expectedTabs} tabs.`
+            : 'Restored 1 tab.',
+        );
         return;
       }
       if (status === 'failed') {

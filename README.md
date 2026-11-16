@@ -189,8 +189,10 @@ Uninstall with `-Uninstall`.
    (`Chrome/Edge file`, `Firefox file`, …). Toggle **Group by source file** to see
    the same rows organized under one banner per imported file (file name, import
    time, tabs found in file, live-capture rows under their own banner).
-   Restore single tabs, a selection, a whole window, or re-pin everything from
-   the Pinned Vault (groups are recreated with their colors).
+   Imported pinned tabs keep their pin state end-to-end — the import report
+   shows how many pinned tabs were found — so "Recover from the past" gets
+   your pinned tabs back as pinned. Restore single tabs, a selection, a whole
+   window, or re-pin everything from the Pinned Vault.
 
 ### Limits you should know about
 
@@ -213,7 +215,7 @@ Uninstall with `-Uninstall`.
 |---|---|
 | **Recently Closed** *(home)* | Search title/URL/domain; filter by pinned-only, browser, source, date range. Restore one tab, a selection, a whole closed window (`Restore window`), or everything selected, into a new window or the current one. Skip-already-open toggle per restore. |
 | **Timeline** | Browse every snapshot ever taken (minute/hour/day tiers). Preview exactly which windows, pinned tabs and groups existed at that moment. **Restore this snapshot** rebuilds it (pinned tabs re-pinned, groups recreated). |
-| **Pinned Vault** | Every site you ever pinned, with first/last pinned dates. **Re-pin all** re-opens them all pinned in a new window (optionally skipping ones already open). |
+| **Pinned Vault** | Every site you ever pinned, with first/last pinned dates and group colors. **Re-pin currently pinned** re-opens exactly what you pin today; **Re-pin everything ever pinned** re-opens the full history, pinned, with original groups. Per-row **Restore** for one site at a time. Plus a tray item: **Re-pin current pinned tabs**. |
 | **Most Used** | Top sites by visit count or active time — today / this week / this month / all time. Seeded from your history database on first import. |
 | **Recover from the past** | See above. |
 | **Settings** | Capture interval, retention tiers, exclusion list, pause toggle, theme (dark/light/system), start-with-Windows, daily backup, encryption at rest, mass-close threshold, JSON/HTML export + seed import. |

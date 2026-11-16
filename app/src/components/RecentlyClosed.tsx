@@ -193,16 +193,22 @@ export default function RecentlyClosed({ notify }: { notify: (msg: string) => vo
 
   const restoreSelected = (newWindow: boolean) => {
     if (selected.size === 0) return;
-    void notifyRestoreResult(notify, api.restoreTabs([...selected], restoreMode(newWindow)));
+    void notifyRestoreResult(notify, api.restoreTabs([...selected], restoreMode(newWindow)), selected.size);
   };
 
   const restoreOne = (row: ClosedTabRow, newWindow: boolean) => {
-    void notifyRestoreResult(notify, api.restoreTabs([row.id], restoreMode(newWindow)));
+    void notifyRestoreResult(notify, api.restoreTabs([row.id], restoreMode(newWindow)), 1);
   };
 
   const restoreWindowOf = (row: ClosedTabRow) => {
     if (row.windowEventId == null) return;
     void notifyRestoreResult(notify, api.restoreWindow(row.windowEventId, restoreMode(true)));
+  };
+
+  const restoreAllPinned = () => {
+    const ids = rows.filter((r) => r.pinned).map((r) => r.id);
+    if (ids.length === 0) return;
+    void notifyRestoreResult(notify, api.restoreTabs(ids, restoreMode(true)), ids.length);
   };
 
   const onListKeyDown = (e: React.KeyboardEvent) => {
@@ -253,6 +259,14 @@ export default function RecentlyClosed({ notify }: { notify: (msg: string) => vo
             <input type="checkbox" checked={skipOpen} onChange={(e) => setSkipOpen(e.target.checked)} style={{ marginRight: 6 }} />
             skip already-open
           </label>
+          <button
+            className="chip"
+            title="Re-open every pinned tab currently shown in one new window, pinned"
+            onClick={restoreAllPinned}
+            disabled={!rows.some((r) => r.pinned)}
+          >
+            📌 Restore all pinned ({rows.filter((r) => r.pinned).length})
+          </button>
           <button
             className={`chip ${grouped ? 'active' : ''}`}
             aria-pressed={grouped}

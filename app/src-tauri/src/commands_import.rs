@@ -35,6 +35,8 @@ pub struct DetectedProfileInfo {
 pub struct ImportOutcome {
     pub items_found: usize,
     pub items_imported: usize,
+    /// How many of the imported tabs were pinned (the "lost pinned tabs" case).
+    pub pinned_imported: usize,
     pub batch_id: i64,
     pub file: String,
     pub kind: String,
@@ -267,6 +269,7 @@ pub fn import_session_file(
         .map_err(|e| e.to_string())?;
     let mut found = 0usize;
     let mut imported = 0usize;
+    let mut pinned_imported = 0usize;
     for (window, tabs) in windows {
         found += tabs.len();
         // Skip useless entries (about:blank/newtab/extension internals).
@@ -278,6 +281,7 @@ pub fn import_session_file(
             continue;
         }
         let closed_ms = window.closed_ms;
+        pinned_imported += tabs.iter().filter(|t| t.pinned).count();
         if tabs.len() > 1 || window.closing {
             write::import_recovered_window(
                 &db,
@@ -311,6 +315,7 @@ pub fn import_session_file(
     Ok(ImportOutcome {
         items_found: found,
         items_imported: imported,
+        pinned_imported,
         batch_id,
         file: name,
         kind: kind_label,
@@ -387,6 +392,7 @@ pub fn import_history_file(
             Ok(ImportOutcome {
                 items_found: count,
                 items_imported: count,
+                pinned_imported: 0, // history databases carry no pinned state
                 batch_id,
                 file: file
                     .file_name()

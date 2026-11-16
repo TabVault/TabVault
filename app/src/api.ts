@@ -140,6 +140,7 @@ export interface PinnedSiteRow {
   pinCount: number;
   currentlyPinned: boolean;
   groupName: string | null;
+  groupColor: string | null;
 }
 
 export interface SearchHit {
@@ -214,6 +215,8 @@ export interface ImportBatchRow {
 export interface ImportOutcome {
   itemsFound: number;
   itemsImported: number;
+  /** How many of the imported tabs were pinned (the lost-pinned-tabs case). */
+  pinnedImported: number;
   batchId: number;
   file: string;
   kind: string;
@@ -241,7 +244,8 @@ export const api = {
   topSites: (window: 'day' | 'week' | 'month' | 'all', metric: 'count' | 'active', limit = 30) =>
     invoke<SiteStatRow[]>('top_sites', { window, metric, limit }),
   pinnedVault: (browser?: string) => invoke<PinnedSiteRow[]>('pinned_vault', { browser }),
-  repinAll: (mode: RestoreMode) => invoke<number>('repin_all', { mode }),
+  repinAll: (mode: RestoreMode, scope: 'current' | 'all' = 'current') => invoke<number>('repin_all', { mode, scope }),
+  restorePinnedSite: (id: number, mode: RestoreMode) => invoke<number>('restore_pinned_site', { id, mode }),
   globalSearch: (query: string, limit = 30) => invoke<SearchHit[]>('global_search', { query, limit }),
   settingsGet: () => invoke<Settings>('settings_get'),
   settingsSet: (settings: Settings) => invoke<void>('settings_set', { settings }),
